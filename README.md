@@ -13,5 +13,7 @@ All scripts are in the scripts subdirectory.
 To Do:
 ==========
 --> Introduce new module with a handful of useful plotting functions
+
 --> Write function in MPASraw to compute the area-weighted global average of a field
+
 --> Update mpas_contour_plot.py to be compatible with the MPASraw (xarray) data format
