@@ -4,6 +4,7 @@ mpas_python
 A few Python scripts for plotting output from the MPAS weather model
 All scripts are in the scripts subdirectory.
 
+--> mpasoutput.py --> Contains the MPASprocessed and MPASraw classes, which are xarray-based datasets for storing MPAS forecast output. MPASprocessed is for MPAS forecasts that have been converted to lat/lon coordinates by Michael Duda's convert_mpas utility: https://github.com/mgduda/convert_mpas/. MPASraw is for storing MPAS output on its native Voronoi cell/edge/vertex grid.
 
 --> mpas_contour_plot.py --> This is a "cheap" way to do a contour plot and could be adapted to do a contourf plot as well.  It simply sets up a rectangular lat-lon grid at a user-specified resolution and interpolates the MPAS model values at cells (or edges for winds) to that rectangular grid. It's a simple matter to plot after that.
 
