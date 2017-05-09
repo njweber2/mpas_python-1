@@ -4,8 +4,14 @@ mpas_python
 A few Python scripts for plotting output from the MPAS weather model
 All scripts are in the scripts subdirectory.
 
---> mpasoutput.py --> Contains the MPASprocessed and MPASraw classes, which are xarray-based datasets for storing MPAS forecast output. MPASprocessed is for MPAS forecasts that have been converted to lat/lon coordinates by Michael Duda's convert_mpas utility: https://github.com/mgduda/convert_mpas/. MPASraw is for storing MPAS output on its native Voronoi cell/edge/vertex grid.
+--> mpasoutput.py --> Contains the MPASprocessed and MPASraw classes, which are xarray-based datasets for storing MPAS forecast output. MPASprocessed is for MPAS forecasts that have been converted to lat/lon coordinates by Michael Duda's convert_mpas utility: https://github.com/mgduda/convert_mpas/. MPASraw is for storing MPAS output on its native Voronoi cell/edge/vertex grid. (N. Weber)
 
---> mpas_contour_plot.py --> This is a "cheap" way to do a contour plot and could be adapted to do a contourf plot as well.  It simply sets up a rectangular lat-lon grid at a user-specified resolution and interpolates the MPAS model values at cells (or edges for winds) to that rectangular grid. It's a simple matter to plot after that.
+--> mpas_contour_plot.py --> This is a "cheap" way to do a contour plot and could be adapted to do a contourf plot as well.  It simply sets up a rectangular lat-lon grid at a user-specified resolution and interpolates the MPAS model values at cells (or edges for winds) to that rectangular grid. It's a simple matter to plot after that. (L. Madaus)
 
---> mpas_pcolor_plot.py --> This makes more expensive, but rather pleasant looking pcolor-type plots.  A large part of the script invoves looping through all of the cells and defining a collection of patches in Basemap-projected coordinates (takes several minutes for fine meshes with large numbers of cells).  This collection is archived to a Pickled file so that it can be read in for future plots much more quickly.  The patch collection is then filled with colors scaled to the data to produce a "blended" pcolor-type map.
+--> mpas_pcolor_plot.py --> This makes more expensive, but rather pleasant looking pcolor-type plots.  A large part of the script invoves looping through all of the cells and defining a collection of patches in Basemap-projected coordinates (takes several minutes for fine meshes with large numbers of cells).  This collection is archived to a Pickled file so that it can be read in for future plots much more quickly.  The patch collection is then filled with colors scaled to the data to produce a "blended" pcolor-type map. (L. Madaus)
+
+To Do:
+==========
+--> Introduce new module with a handful of useful plotting functions
+--> Write function in MPASraw to compute the area-weighted global average of a field
+--> Update mpas_contour_plot.py to be compatible with the MPASraw (xarray) data format
