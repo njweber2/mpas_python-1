@@ -6,18 +6,22 @@ from datetime import datetime, timedelta
 import xarray.ufuncs as xu
 from copy import deepcopy
 
+#################################################################################
+# MPAS forecast on a lat-lon grid
+#################################################################################
 
-class MPASforecast(xarray.Dataset):
+class MPASprocessed(xarray.Dataset):
     """Define a multivariate Dataset composed of MPAS forecast output."""
         
     @classmethod
     def from_netcdf(cls, ncfile, idate, dt):
         """
-        Initializes a new MPASforecast object when given
-        a list of MPAS output files (netcdf)
+        Initializes a new MPASprocessed object when given
+        a processed MPAS output file (netcdf)
         
         MPAS files are assumed to be on a lat lon grid; i.e., raw MPAS diag.nc (or any 
-        other stream) files converted with the convert_mpas utility.
+        other stream) files converted with the convert_mpas utility:
+        https://github.com/mgduda/convert_mpas/
         """
         assert isinstance(idate, datetime)
         forecast = xarray.open_dataset(ncfile)
@@ -32,7 +36,7 @@ class MPASforecast(xarray.Dataset):
     def __setitem__(self, key, value):
         self.__dict__[key] = value
 
-#==== Functions to get various useful attributes of the state =================
+#==== Functions to get various useful attributes ==============================
     def ntimes(self):    
         return self.dims['Time']
     def ny(self):
@@ -48,7 +52,7 @@ class MPASforecast(xarray.Dataset):
     def leadtimes(self):
         return [(d - self.idate).seconds/3600 for d in self.vdates()]
         
-#==== Get the lat/lon grids for a given variable ==============================
+#==== Get the lat/lon grid ====================================================
     def latlons(self):
         """ Returns 1D lat and lon grids """
         return self['lat'].values[:], self['lon'].values[:]
@@ -90,3 +94,62 @@ class MPASforecast(xarray.Dataset):
     def save_to_disk(self, filename='mpas_forecast_{:%Y%m%d%H}.nc'):
         """ Dump this object to disk """
         self.to_netcdf(filename.format(self.idate))
+        
+        
+##################################################################################
+# raw MPAS forecast output on Voronoi mesh
+##################################################################################
+
+class MPASraw(xarray.Dataset):
+"""Define a multivariate Dataset composed of MPAS forecast output."""
+        
+    @classmethod
+    def from_netcdf(cls, ncfiles, idate, dt):
+        """
+        Initializes a new MPASraw object when given
+        a list of MPAS output files (netcdf)
+        
+        MPAS files are assumed to be raw output from the model, 
+        e.g., history.*.nc or diag.*.nc files.
+        """
+        assert isinstance(idate, datetime)
+        forecast = xarray.open_mfdataset(ncfiles, concat_dim='Time')
+        forecast.__class__ = cls
+        # Let's make sure that this MPAS output stream has cell/edge/vertex info
+        for var in ['cellsOnCell', 'cellsOnEdge', 'cellsOnVertex']:
+            assert var in forecast.variables.keys()
+        # Need to store date info, because it is not stored in the MPAS netcdf
+        # metadata by default
+        forecast['idate'] = idate  # initialization date
+        forecast['dt'] = dt        # output frequency (days)
+        return forecast
+
+    # For adding the "idate" and "dt" items above
+    def __setitem__(self, key, value):
+        self.__dict__[key] = value
+        
+    #==== Functions to get various useful attributes ==========================
+    def ntimes(self): 
+        return self.dims['Time']
+    def ncells(self):
+        return self.dims['nCells']
+    def nedges(self):
+        return self.dims['nEdges']
+    def nvertices(self):
+        return self.dims['nVertices']
+    def vars(self):
+        return self.variables.keys()
+    def nvars(self):
+        return len(self.vars())
+    def vdates(self):
+        return np.array([self.idate +  timedelta(hours=t*self.dt) for t in range(self.ntimes())])
+    def leadtimes(self):
+        return [(d - self.idate).seconds/3600 for d in self.vdates()]
+    
+    #==== Get the lat/lon locations of the cells/edges/vertices ===============
+    def cell_latlons(self):
+        return self['latCell'].values[:], self['lonCell'].values[:]
+    def edge_latlons(self):
+        return self['latEdge'].values[:], self['lonEdge'].values[:]
+    def vertex_latlons(self):
+        return self['latVertex'].values[:], self['lonVertex'].values[:]
