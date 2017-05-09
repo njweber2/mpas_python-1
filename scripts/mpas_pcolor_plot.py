@@ -1,10 +1,15 @@
 #!/usr/bin/env python
 
 """
-Script to do  pcolor-style MPAS model output using netCDF4, Basemap
+Script to do  pcolor-style MPAS model output using Basemap
 and matplotlib.pyplot
+
+Author: Luke Madaus
+
+Modified by: Nick Weber (May 2017)
+ - added MPASraw (xarray) functionality
 """
-from netCDF4 import Dataset
+from mpasoutput import MPASraw
 import numpy as np
 import matplotlib
 import matplotlib.path as mpath
@@ -12,38 +17,42 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
 import os
+from datetime import datetime
+
 def main():
+    ncfiles = '/glade/scratch/njweber2/experiments/24km_channel_test_20170401/history*.nc'
+    mpas_fcst = MPASraw.from_netcdf(ncfiles, datetime(2017,4,1,0), 6)
+    pcolor_fill(mpas_fcst,var='t2m', export=False)
 
-    maindir = '../../../work'
-    diag_files = [f for f in os.listdir(maindir) if f.startswith('diag')]
-    #mpas_file = '../output.nc'
-    for fnum,f in enumerate(diag_files):
-        ncfile = Dataset('/'.join((maindir,f)),'r')
-
-        #pcolor_fill(ncfile,var='height_500hPa')
-        pcolor_fill(ncfile,var='height_500hPa', export=True)
-        ncfile.close()
-
-def pcolor_fill(ncfile, var, plevel=None, export=False):
+def pcolor_fill(fcst, var='t2m', picklefile='mpas_paths.pckl', plevel=None, export=False):
     """ Function to do a pcolor-mesh-type plot of "var" on the optional level "plevel"
     """
-    import cPickle
+    import _pickle as cPickle
     # Check to see that this variable exists
-    if var not in ncfile.variables.keys():
-        print "ERROR: Cannot find variable:", var
+    if var not in fcst.variables.keys():
+        print("ERROR: Cannot find variable:", var)
         exit(1)
 
 
     # Set up the plot
-    m = make_map(ncfile, lons=None, lats=None)
+    m = make_map(lons=None, lats=None)
 
 
     # Load the field and get its dimensions
-    field = ncfile.variables[var]
-    
-    field_dims = field.dimensions
+    field = fcst.variables[var]
+    field_dims = field.dims
     field_shape = field.shape
 
+    # Main deal with MPAS data is that u,v are defined on edges of cells while
+    # other variables are based on the cells.  Need to sort out what our
+    # defining unit is
+    if 'nEdges' in field_dims or 'nVertices' in field_dims:
+        # May just convert this back to a gridded contour plot
+        # Not implemented for now
+        print("Edge or vertex data not implemented for pcolor-type plot")
+        exit(1)
+        
+        
     # Going to create a collection of patches in matplotlib to enable speedy
     # plotting.  Call this function to do that if there is no archived patch
     # collection pickle file already.  It takes several minutes to generate the initial
@@ -52,23 +61,11 @@ def pcolor_fill(ncfile, var, plevel=None, export=False):
     # like to generate the collection once and call the saved file every
     # time...makes it go a  lot faster.
     try:
-        patchfile = open('mpas_paths.pckl','rb')
+        patchfile = open(picklefile,'rb')
         p = cPickle.load(patchfile)
         patchfile.close()
     except:
-        p = mpas_grid_to_patches(bmap=m)
-
-
-
-    # Main deal with MPAS data is that u,v are defined on edges of cells while
-    # other variables are based on the cells.  Need to sort out what our
-    # defining unit is
-    if 'nEdges' in field_dims or 'nVertices' in field_dims:
-        # May just convert this back to a gridded contour plot
-        # Not implemented for now
-        print "Edge or vertex data not implemented for pcolor-type plot"
-        exit(1)
-
+        p = mpas_grid_to_patches(mpasfname=fcst, picklefile=picklefile, bmap=m)
 
 
     # If we have nVertLevels, figure out which vertical level we want
@@ -78,7 +75,7 @@ def pcolor_fill(ncfile, var, plevel=None, export=False):
     if 'Time' not in field_dims:
         timeloop = [0]
     else:
-        timeloop = range(field_shape[field_dims.index('Time')])
+        timeloop = range(fcst.ntimes())
     for time in timeloop:
         # Get the slice of "field" that we want
         if 'Time' in field_dims:
@@ -92,8 +89,8 @@ def pcolor_fill(ncfile, var, plevel=None, export=False):
             except:
                 curfield = field[:]
         # Get the current time string
-        timestr = ''.join(list(ncfile.variables['xtime'][time])).strip()
-        print timestr
+        timestr = fcst['xtime'].values[time].decode("utf-8").strip()
+        print(timestr)
 
         # Now plot
         fig = plt.figure(figsize=(15,8))
@@ -108,6 +105,7 @@ def pcolor_fill(ncfile, var, plevel=None, export=False):
         p.set_antialiaseds(False)
         # Set the colormap here
         p.set_cmap(matplotlib.cm.spectral)
+        #p.set_clim(vmin=270, vmax=290)
         # Can normalize the colormap here if desired
         #p.set_norm()
         # Add the collection with its colorized properties to the plot
@@ -124,29 +122,34 @@ def pcolor_fill(ncfile, var, plevel=None, export=False):
 
 
 
-def mpas_grid_to_patches(mpasfname='../output.nc', bmap=None):
+def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
+                         idate=datetime(2017,4,1,0), dt=6, bmap=None):
     """ Function to create a collection of patches in Basemap plotting
     coordinates that define the cells of the MPAS domain """
-    print "Defining Path Collection on MPAS Grid"
+    print("Defining Path Collection on MPAS Grid")
 
-    if not isinstance(mpasfname,Dataset):
-        mpasfile = Dataset(mpasfname,'r')
+    if not isinstance(mpasfname, MPASraw):
+        mpasfcst = MPASraw(mpasfname,idate,dt)
     else:
-        mpasfile = mpasfname
+        mpasfcst = mpasfname
+        
+    # We just need one time
+    if 'Time' in mpasfcst.dims:
+        mpasfcst = mpasfcst.isel(Time=0)
 
     # Get the number of cells
-    nCells = len(mpasfile.dimensions['nCells'])
-    nEdgesOnCell = mpasfile.variables['nEdgesOnCell']
-    verticesOnCell = mpasfile.variables['verticesOnCell']
-    latVertex = mpasfile.variables['latVertex']
-    lonvertex = mpasfile.variables['lonVertex']
+    nCells = mpasfcst.dims['nCells']
+    nEdgesOnCell = mpasfcst['nEdgesOnCell'].values
+    verticesOnCell = mpasfcst['verticesOnCell'].values
+    latvertex = mpasfcst['latVertex'].values
+    lonvertex = mpasfcst['lonVertex'].values
 
     patches = [None] * nCells
-    print "    Total num cells:", nCells
+    print("    Total num cells:", nCells)
     # Need a collection of lats and lons for each vertex of each cell
-    for c in xrange(nCells):
-        if c % 5000 == 0:
-            print "        On:", c
+    for c in range(nCells):
+        if c % 15000 == 0:
+            print("        On:", c)
         # Each collection of vertices has a length of maxEdges.  Need to figure
         # out how many vertices are ACTUALLY on the cell, as the rest is just
         # padded with junk data
@@ -156,12 +159,9 @@ def mpas_grid_to_patches(mpasfname='../output.nc', bmap=None):
         cell_verts = np.append(cell_verts,cell_verts[0:1])
         # Subtract one
         cell_verts -= 1
-        #cell_verts = mpasfile.variables['indexToVertexID'][cell_vert_index]
         # Get the latitudes and longitudes of these and convert to degrees
-        vert_lats = np.array([mpasfile.variables['latVertex'][d] * 180./np.pi for d in cell_verts])
-        vert_lons = np.array([mpasfile.variables['lonVertex'][d] * 180./np.pi for d in cell_verts])
-        #print cell_verts
-        #print vert_lons
+        vert_lats = np.array([latvertex[d] * 180./np.pi for d in cell_verts])
+        vert_lons = np.array([lonvertex[d] * 180./np.pi for d in cell_verts])
         # Check for overlap of date line
         diff_lon = np.subtract(vert_lons, vert_lons[0])
         vert_lons[diff_lon > 180.0] = vert_lons[diff_lon > 180.0] - 360.0
@@ -181,9 +181,9 @@ def mpas_grid_to_patches(mpasfname='../output.nc', bmap=None):
     # Now crate a patch collection
     p = matplotlib.collections.PatchCollection(patches)
     # Archive for future use
-    print "    Archiving paths..."
-    import cPickle
-    outfile = open('mpas_paths.pckl','wb')
+    print("    Archiving paths...")
+    import _pickle as cPickle
+    outfile = open(picklefile,'wb')
     cPickle.dump(p, outfile)
     outfile.close()
 
@@ -192,15 +192,18 @@ def mpas_grid_to_patches(mpasfname='../output.nc', bmap=None):
 
 
 
-def make_map(mpasfile, lons, lats):
+def make_map(lons, lats, centerloc=(47.6062, -122.3321), globalmap=False):
     """ Create a basemap object and projected coordinates for a global map """
     # MPAS cell lats and lons are projected using a cylindrical projection;
     # other projections are not recommended...
-    #m = Basemap(projection='cyl',llcrnrlat=-90, urcrnrlat=90, llcrnrlon=-180,
-    #           urcrnrlon=180, resolution='c')
-    m = Basemap(projection='cyl',llcrnrlat=20, urcrnrlat=70, llcrnrlon=-179,
-               urcrnrlon=-20, resolution='c')
-
+    if globalmap:
+        m = Basemap(projection='cyl',llcrnrlat=-90, urcrnrlat=90, llcrnrlon=-180,
+                   urcrnrlon=180, resolution='c')
+    else:
+        latc = centerloc[0]
+        lonc = centerloc[1]
+        m = Basemap(projection='cyl',llcrnrlat=latc-4., urcrnrlat=latc+4., 
+                    llcrnrlon=lonc-4,urcrnrlon=lonc+4, resolution='l')
 
     if lons == None or lats == None:
         # Just return the map
