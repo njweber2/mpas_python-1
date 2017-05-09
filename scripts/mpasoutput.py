@@ -101,7 +101,7 @@ class MPASprocessed(xarray.Dataset):
 ##################################################################################
 
 class MPASraw(xarray.Dataset):
-"""Define a multivariate Dataset composed of MPAS forecast output."""
+    """Define a multivariate Dataset composed of MPAS forecast output."""
         
     @classmethod
     def from_netcdf(cls, ncfiles, idate, dt):
