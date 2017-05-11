@@ -8,6 +8,7 @@ Author: Luke Madaus
 
 Modified by: Nick Weber (May 2017)
  - added MPASraw (xarray) functionality
+ - updated for use in Python 3.x
 """
 from mpasoutput import MPASraw
 import numpy as np
@@ -125,8 +126,8 @@ def pcolor_fill(fcst, var='t2m', picklefile='mpas_paths.pckl', plevel=None, expo
 def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
                          idate=datetime(2017,4,1,0), dt=6, bmap=None):
     """ Function to create a collection of patches in Basemap plotting
-    coordinates that define the cells of the MPAS domain """
-    print("Defining Path Collection on MPAS Grid")
+    coordinates that define the cells of the MPAS mesh """
+    print("Defining patch collection on MPAS grid...")
 
     if not isinstance(mpasfname, MPASraw):
         mpasfcst = MPASraw(mpasfname,idate,dt)
@@ -192,7 +193,7 @@ def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
 
 
 
-def make_map(lons, lats, centerloc=(47.6062, -122.3321), globalmap=False):
+def make_map(lons, lats, globalmap=False):
     """ Create a basemap object and projected coordinates for a global map """
     # MPAS cell lats and lons are projected using a cylindrical projection;
     # other projections are not recommended...
@@ -202,10 +203,10 @@ def make_map(lons, lats, centerloc=(47.6062, -122.3321), globalmap=False):
     else:
         latc = centerloc[0]
         lonc = centerloc[1]
-        m = Basemap(projection='cyl',llcrnrlat=latc-4., urcrnrlat=latc+4., 
-                    llcrnrlon=lonc-4,urcrnrlon=lonc+4, resolution='l')
+        m = Basemap(ax=ax,projection='cyl', llcrnrlat=22.,urcrnrlat=53.,\
+                    llcrnrlon=-125.,urcrnrlon=-67,resolution='c')
 
-    if lons == None or lats == None:
+    if lons is None or lats is None:
         # Just return the map
         return m
     else:
