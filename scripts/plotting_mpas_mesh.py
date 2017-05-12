@@ -8,6 +8,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from color_maker.color_maker import color_map
 from plotting_mpas_latlon import truncate_colormap, get_contour_levs, draw_fig_axes
+from datetime import datetime
+from mpasoutput import MPASraw
 
 #############################################################################################################
 
@@ -19,6 +21,9 @@ def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
     Written by Luke Madaus.
     """
     import _pickle as cPickle
+    import matplotlib
+    import matplotlib.path as mpath
+    import matplotlib.patches as mpatches
     print("Defining patch collection on MPAS grid...")
 
     if not isinstance(mpasfname, MPASraw):

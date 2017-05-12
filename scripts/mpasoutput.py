@@ -64,6 +64,19 @@ class MPASprocessed(xarray.Dataset):
             raise ValueError('"{}" not in list of valid variables'.format(vrbl))
         return self[vrbl]
     
+#==== Compute the total precipitation rate from rainc + rainnc ============
+    def compute_preciprate(self, dt=3):
+        assert dt % self.dt == 0
+        raint = self['rainc'] + self['rainnc']
+        prate = (raint - raint.shift(Time=int(dt/self.dt)))
+        if dt==1: unitstr = 'mm/h'
+        else: unitstr = 'mm/{}h'.format(int(dt))
+        prate = prate.assign_attrs(units=unitstr, long_name='precipitation rate')
+        varname = 'prate{}h'.format(dt)
+        assignvar = {varname : prate}
+        self.update(self.assign(**assignvar))
+        print('Created new variable: "{}"'.format(varname))
+    
 #==== Transform the dataset so all lons are positive ==========================
     def restructure_lons(self):
         """
@@ -90,6 +103,15 @@ class MPASprocessed(xarray.Dataset):
         """
         lo, la = np.meshgrid(self['lon'].values[:], self['lat'].values[:])
         return m(lo, la)
+    
+#==== Compute the temporal average of a field ================================
+    def compute_timemean(self, field, dt_i=None, dt_f=None):
+        if dt_i is None or dt_f is None:
+            return self[field].mean(dim='Time', keep_attrs=True)
+        else:
+            ti = nearest_ind(self.vdates, dt_i)
+            tf = nearest_ind(self.vdates, dt_f) + 1
+            return self.isel(Time=range(ti,tf))[field].mean(dim='Time', keep_attrs=True)
     
 #==== Function to save the xarray Dataset to a netcdf file ====================
     def save_to_disk(self, filename='mpas_forecast_{:%Y%m%d%H}.nc'):
@@ -154,11 +176,11 @@ class MPASraw(xarray.Dataset):
     
     #==== Get the lat/lon locations of the cells/edges/vertices ===============
     def cell_latlons(self):
-        return self['latCell'].values[:], self['lonCell'].values[:]
+        return np.degrees(self['latCell'].values[0,:]), np.degrees(self['lonCell'].values[0,:])
     def edge_latlons(self):
-        return self['latEdge'].values[:], self['lonEdge'].values[:]
+        return np.degrees(self['latEdge'].values[0,:]), np.degrees(self['lonEdge'].values[0,:])
     def vertex_latlons(self):
-        return self['latVertex'].values[:], self['lonVertex'].values[:]
+        return np.degrees(self['latVertex'].values[0,:]), np.degrees(self['lonVertex'].values[0,:])
     
     #==== Compute the total precipitation rate from rainc + rainnc ============
     def compute_preciprate(self, dt=3):
@@ -169,8 +191,8 @@ class MPASraw(xarray.Dataset):
         else: unitstr = 'mm/{}h'.format(int(dt))
         prate = prate.assign_attrs(units=unitstr, long_name='precipitation rate')
         varname = 'prate{}h'.format(dt)
-        assignvar = {varname : prate}
-        self.update(self.assign(**assignvar))
+        attrs = {varname : prate}
+        self.update(self.assign(**attrs))
         print('Created new variable: "{}"'.format(varname))
     
     #==== Save the terrain elevation (on the native grid) as a variable =======
@@ -211,6 +233,24 @@ class MPASraw(xarray.Dataset):
             # return the un-weighted average
             return self[field].mean(dim=dimvar, skipna=True, keep_attrs=True)
         
+    #==== Get the timeseries of a given field at the desired lat/lon =============
+    def get_timeseries(self, field, loc):
+        """ Interpolation method = nearest """
+        lat, lon = loc
+        if lon < 0: lon += 360
+        if 'nCells' in self[field].dims:
+            lats, lons = self.cell_latlons(); dim = 'nCells'
+        elif 'nEdges' in self[field].dims:
+            lats, lons = self.edge_latlons(); dim = 'nEdges'
+        elif 'nVertices' in self[field].dims:
+            lats, lons = self.vertex_latlons(); dim = 'nVertices'
+        # Find the nearest point in the mesh
+        ind = (np.abs(lats-lat) + np.abs(lons-lon)).argmin()
+        print('Fetching data at {:.02f}N {:.02f}E'.format(lats[ind], lons[ind]))
+        # Return the data at that point
+        attrs = {dim : ind}
+        return self[field].isel(**attrs).values
+        
     #==== Function to save the xarray Dataset to a netcdf file ====================
     def save_to_disk(self, filename='{}/mpas_raw_forecast_{:%Y%m%d%H}.nc'):
         """ Dump this object to disk """
@@ -224,5 +264,8 @@ class MPASraw(xarray.Dataset):
 
 def timedelta_hours(dt_i, dt_f):
     return (dt_f-dt_i).days*24 + (dt_f-dt_i).seconds/3600
+
+def nearest_ind(array, value):
+    return int((np.abs(array-value)).argmin())
         
             
