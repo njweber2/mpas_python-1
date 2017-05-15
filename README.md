@@ -12,8 +12,19 @@ All scripts are in the scripts subdirectory.
 
 To Do:
 ==========
---> Introduce new module with a handful of useful plotting functions
+--> Add more plotting functions to a) plotting_mpas_mesh.py and b) plotting_mpas_latlon.py
 
---> Write function in MPASraw to compute the area-weighted global average of a field
+     - Hovmoller diagrams (b)
+     - Calculate/plot approximate resolution (a)
 
 --> Update mpas_contour_plot.py to be compatible with the MPASraw (xarray) data format
+
+--> Add more verification tools
+
+     - Simple error maps (forecast field, analysis field, error shading)
+     - MAE/bias/correlation maps
+
+--> Move module with custom Basemap projections into project
+
+--> Push changes from local repository
+
