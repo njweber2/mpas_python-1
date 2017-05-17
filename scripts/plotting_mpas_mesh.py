@@ -46,7 +46,7 @@ def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
     print("    Total num cells:", nCells)
     # Need a collection of lats and lons for each vertex of each cell
     for c in range(nCells):
-        if c % 15000 == 0:
+        if c % 50000 == 0:
             print("        On:", c)
         # Each collection of vertices has a length of maxEdges.  Need to figure
         # out how many vertices are ACTUALLY on the cell, as the rest is just
@@ -107,13 +107,13 @@ def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vm
     except:
         p = mpas_grid_to_patches(mpasfname=fcst_xry, picklefile=picklefile, bmap=m)
         
-    # Get the terrain grid for plotting
+    # Get the field grid for plotting
     if 'Time' in fcst_xry[var].dims:
         field = fcst_xry[var].values[time,:]
     else:
         field = fcst_xry[var].values[:]
         
-    # Plot the terrain elevation
+    # Plot the field
     p.set_array(field)
     # Remove lines delineating each cell
     p.set_edgecolors('none')
@@ -130,5 +130,37 @@ def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vm
                 transform=ax.transAxes, ha='right', va='bottom', fontsize=12)
         ax.text(1.0, 1.048, 'init: {:%Y-%m-%d %H:00}'.format(fcst_xry.idate), 
                 transform=ax.transAxes, ha='right', va='bottom', fontsize=12)
+        
+#############################################################################################################
 
+def plot_mesh(m, ax, fcst_xry, picklefile=None, title='MPAS Voronoi mesh'):
+    """
+    Draw the MPAS Voronoi mesh over map m
+    fcst_xry ---> an MPASraw object
+    """
+    import _pickle as cPickle
+    
+    if picklefile is None:
+        picklefile = '{}/stere_conus_24k_mesh.pckl'.format(fcst_xry.workdir)
+        
+    # Create mesh patch file if it doesn't exist already
+    try:
+        patchfile = open(picklefile,'rb')
+        p = cPickle.load(patchfile)
+        patchfile.close()
+    except:
+        p = mpas_grid_to_patches(mpasfname=fcst_xry, picklefile=picklefile, bmap=m)
+    
+    # Fill/color and oceans and land
+    m.drawmapboundary(fill_color='#99ffff')
+    m.fillcontinents(color='#cc9966', lake_color='#99ffff',zorder=0)
+      
+    # Add the collection to the plot
+    ax.add_collection(p)
+    # Delineate each cell with black lines, no fill
+    p.set_facecolor('none')
+    p.set_edgecolors('k')
+    if title is not None:
+        ax.text(0.0, 1.015, title, transform=ax.transAxes, ha='left', va='bottom', fontsize=15)
+        
 

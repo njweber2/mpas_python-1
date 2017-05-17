@@ -60,7 +60,7 @@ def get_contour_levs(field, nlevs=8, zerocenter=False, maxperc=99):
 
 #############################################################################################################
 
-def draw_fig_axes(proj='orthoNP', mapcol='k', figsize=(12,10), twocb=False):
+def draw_fig_axes(proj='orthoNP', mapcol='k', figsize=(12,10), nocb=False):
     """
     Prepares a single-panel figure and map projection for plotting.
     
@@ -73,17 +73,16 @@ def draw_fig_axes(proj='orthoNP', mapcol='k', figsize=(12,10), twocb=False):
     figure, axis, colorbar axis, and Basemap objects
     """
     from mpl_toolkits.axes_grid1 import make_axes_locatable
-    import my_map_projections as mymaps
+    import map_projections as mymaps
 
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=figsize)
     fig.subplots_adjust(top=0.92)
     m = mymaps.draw_projection(ax, proj, mapcol=mapcol)
-    divider = make_axes_locatable(ax)
-    if twocb:
-        cax = divider.append_axes('right', size='3%', pad=0.4)
-        cax2 = divider.append_axes('right', size='3%', pad=0.8)
-        return fig, ax, cax, cax2, m
+    
+    if nocb:
+        return fig, ax, m
     else:
+        divider = make_axes_locatable(ax)
         cax = divider.append_axes('right', size='5%', pad=0.6)
         return fig, ax, cax, m
 

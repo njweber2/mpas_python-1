@@ -7,9 +7,9 @@ import xarray.ufuncs as xu
 from copy import deepcopy
 import os
 
-########################################################################################
+###############################################################################################
 # MPAS forecast on a lat-lon grid
-########################################################################################
+###############################################################################################
 
 class MPASprocessed(xarray.Dataset):
     """Define a multivariate Dataset composed of MPAS forecast output."""
@@ -93,10 +93,6 @@ class MPASprocessed(xarray.Dataset):
         forecast['idate'] = idate  # initialization date
         forecast['dt'] = dt        # output frequency (days)
         forecast['type'] = 'MPAS'
-#        # Need to add lat/lon info
-#        latvar = DataArray(lats, name='lat', dims={'nLats':len(lats)})
-#        lonvar = DataArray(lons, name='lon', dims={'nLons':len(lons)})
-#        forecast.update(forecast.assign(lat=latvar, lon=lonvar))
         return forecast
 
     @classmethod
@@ -228,7 +224,7 @@ class MPASprocessed(xarray.Dataset):
             return self.isel(Time=range(ti,tf))[field].mean(dim='Time', keep_attrs=True)
     
 #==== Get the timeseries of a given field at the desired lat/lon =============
-    def get_timeseries(self, field, loc):
+    def get_timeseries(self, field, loc, verbose=False):
         """ Interpolation method = nearest """
         lat, lon = loc
         lats, lons = self.latlons()
@@ -239,7 +235,8 @@ class MPASprocessed(xarray.Dataset):
         # Find the nearest point on the grid
         lat_ind = nearest_ind(lats, lat)
         lon_ind = nearest_ind(lons, lon)
-        print('Fetching data at {:.02f}N {:.02f}E'.format(lats[lat_ind], lons[lon_ind]))
+        if verbose:
+            print('Fetching data at {:.02f}N {:.02f}E'.format(lats[lat_ind], lons[lon_ind]))
         # Return the data at that point
         return self[field].isel(nLats=lat_ind, nLons=lon_ind).values
     
@@ -250,9 +247,9 @@ class MPASprocessed(xarray.Dataset):
         
         
         
-########################################################################################
+################################################################################################
 # raw MPAS forecast output on Voronoi mesh
-########################################################################################
+################################################################################################
 
 
 class MPASraw(xarray.Dataset):
@@ -366,7 +363,7 @@ class MPASraw(xarray.Dataset):
             return self[field].mean(dim=dimvar, skipna=True, keep_attrs=True)
         
     #==== Get the timeseries of a given field at the desired lat/lon =============
-    def get_timeseries(self, field, loc):
+    def get_timeseries(self, field, loc, verbose=False):
         """ Interpolation method = nearest """
         lat, lon = loc
         if lon < 0: lon += 360
@@ -378,7 +375,8 @@ class MPASraw(xarray.Dataset):
             lats, lons = self.vertex_latlons(); dim = 'nVertices'
         # Find the nearest point in the mesh
         ind = (np.abs(lats-lat) + np.abs(lons-lon)).argmin()
-        print('Fetching data at {:.02f}N {:.02f}E'.format(lats[ind], lons[ind]))
+        if verbose:
+            print('Fetching data at {:.02f}N {:.02f}E'.format(lats[ind], lons[ind]))
         # Return the data at that point
         attrs = {dim : ind}
         return self[field].isel(**attrs).values
@@ -408,7 +406,7 @@ class MPASraw(xarray.Dataset):
             assert len(np.shape(flons))==len(np.shape(flats))==1
             
         # If we have times, find only the desired time
-        if 'Time' not in self.dims:
+        if 'Time' not in self[field].dims:
             curfield = self[field].values[:]
         else:
             time = nearest_ind(self.vdates(), date)
@@ -422,6 +420,53 @@ class MPASraw(xarray.Dataset):
         gridded = griddata(flons, flats, curfield, lons, lats, interp='linear')
         return gridded
 
+    #==== Calculate the approximate spherical grid spacing =========================
+    def approx_dx(self):
+        """ Uses the dcEdge variable to easily calculate the average distance
+        between each cell and its neighbors """
+
+        # Check to see if we already have grid spacing information
+        if 'dx' in self.variables.keys():
+            print('Grid spacing "dx" has already been computed.')
+            return
+
+        print('Calculating approximate grid spacing...')
+        # We just need one time
+        if 'Time' in self.dims:
+            fcst = self.isel(Time=0)
+        else:
+            fcst = deepcopy(self)
+
+        # Get cell navigation information
+        nCells = fcst.dims['nCells']
+        nEdgesOnCell = fcst['nEdgesOnCell'].values
+        edgesOnCell = fcst['edgesOnCell'].values
+        dcEdge = fcst['dcEdge'].values  # spherical distance between cells!
+
+        # Empty array for approximate dx values
+        dx = np.zeros(nCells)
+        print("    Total num cells:", nCells)
+        # Loop through all the cells
+        for c in range(nCells):
+            if c % 50000 == 0:
+                print("        On:", c)
+
+            # Each collection of edges has a length of maxEdges.  
+            # Need to figure out how many edges are ACTUALLY on the cell, 
+            # as the rest is just padded with junk data
+            # These are the edge indices
+            edge_inds = np.array(edgesOnCell[c,:nEdgesOnCell[c]])
+            # Subtract one
+            edge_inds -= 1
+            # Get the distance between each cell and this cell (in km)
+            dx_each_cell = [dcEdge[ei]/1000. for ei in edge_inds]
+            # Assign the average distance as the grid spacing of this cell
+            dx[c] = np.mean(dx_each_cell)
+
+        # Finally, assign this approx. grid spacing as a new variable "dx"
+        dxvar = xarray.DataArray(np.array(dx), dims={'nCells' : nCells})
+        self.update(self.assign(dx=dxvar))
+        return
     
     #==== Function to save the xarray Dataset to a netcdf file ====================
     def save_to_disk(self, filename='{}/mpas_raw_forecast_{:%Y%m%d%H}.nc'):
@@ -429,15 +474,33 @@ class MPASraw(xarray.Dataset):
         self.to_netcdf(filename.format(self.workdir, self.idate))
             
     
-########################################################################################
+###############################################################################################
 # extra utilities
-########################################################################################
+###############################################################################################
 
 
 def timedelta_hours(dt_i, dt_f):
+    """ Find the number of hours between two dates """
     return (dt_f-dt_i).days*24 + (dt_f-dt_i).seconds/3600
 
 def nearest_ind(array, value):
     return int((np.abs(array-value)).argmin())
+
+def haversine(loc1, loc2, indegrees=True):
+    """ Calculate distance between two latlon locations using Haversine formula"""
+    R = 6371  # radius of Earth [km]
+    lat1 = loc1[0]
+    lat2 = loc2[0]
+    dlon = loc2[1] - loc1[1]
+    if indegrees:
+        lat1 = np.radians(lat1) 
+        lat2 = np.radians(lat2)
+        dlon = np.radians(dlon)
+    dlat = lat2 - lat1
+    
+    # Haversine formula:
+    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+    return R * c
         
             
