@@ -12,19 +12,11 @@ All scripts are in the scripts subdirectory.
 
 To Do:
 ==========
+--> Add functionality for a 4D grid (new dimension: z)
+
 --> Add more plotting functions to a) plotting_mpas_mesh.py and b) plotting_mpas_latlon.py
 
-     - Hovmoller diagrams (b)
      - Calculate/plot approximate resolution (a)
 
---> Update mpas_contour_plot.py to be compatible with the MPASraw (xarray) data format
-
---> Add more verification tools
-
-     - Simple error maps (forecast field, analysis field, error shading)
-     - MAE/bias/correlation maps
-
 --> Move module with custom Basemap projections into project
-
---> Push changes from local repository
 

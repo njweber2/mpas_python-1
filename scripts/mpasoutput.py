@@ -15,7 +15,7 @@ class MPASprocessed(xarray.Dataset):
     """Define a multivariate Dataset composed of MPAS forecast output."""
         
     @classmethod
-    def from_netcdf(cls, ncfile, idate, dt):
+    def from_netcdf(cls, ncfile, idate, dt, chunks={'Time': 10}):
         """
         Initializes a new MPASprocessed object when given
         a processed MPAS output file (netcdf)
@@ -24,7 +24,7 @@ class MPASprocessed(xarray.Dataset):
         other stream) files converted with the convert_mpas utility:
         https://github.com/mgduda/convert_mpas/
         """
-        forecast = xarray.open_dataset(ncfile)
+        forecast = xarray.open_dataset(ncfile, chunks=chunks)
         forecast.__class__ = cls
         # Need to store date info, because it is not stored in the MPAS netcdf
         # metadata by default
@@ -35,7 +35,8 @@ class MPASprocessed(xarray.Dataset):
     
     @classmethod
     def from_latlon_grid(cls, lats, lons, workdir, idate, dt, inputstream='diag.*.nc',
-                         meshinfofile='*init.nc', outputfile='diags_interp.nc'):
+                         meshinfofile='*init.nc', outputfile='diags_interp.nc',
+                         chunks={'Time': 10}):
         """
         Initializes a new MPASprocessed object when given
         a desired lat/lon grid
@@ -85,21 +86,22 @@ class MPASprocessed(xarray.Dataset):
             Popen(['cd {}; mv latlon.nc {}'.format(workdir, outputfile)], shell=True).wait()
         
         # Finally, create our MPASprocessed object like normal
-        forecast = xarray.open_dataset('{}/{}'.format(workdir, outputfile))
+        forecast = xarray.open_dataset('{}/{}'.format(workdir, outputfile), chunks=chunks)
         forecast.__class__ = cls
         # Need to store date info, because it is not stored in the MPAS netcdf
         # metadata by default
         forecast['idate'] = idate  # initialization date
         forecast['dt'] = dt        # output frequency (days)
         forecast['type'] = 'MPAS'
-        # Need to add lat/lon info
-        latvar = DataArray(lats, name='lat', dims={'nLats':len(lats)})
-        lonvar = DataArray(lons, name='lon', dims={'nLons':len(lons)})
-        forecast.update(forecast.assign(lat=latvar, lon=lonvar))
+#        # Need to add lat/lon info
+#        latvar = DataArray(lats, name='lat', dims={'nLats':len(lats)})
+#        lonvar = DataArray(lons, name='lon', dims={'nLons':len(lons)})
+#        forecast.update(forecast.assign(lat=latvar, lon=lonvar))
         return forecast
 
     @classmethod
-    def from_GFS_netcdf(cls, workdir, idate, fdate, ncfile='gfs_analyses.nc'):
+    def from_GFS_netcdf(cls, workdir, idate, fdate, ncfile='gfs_analyses.nc',
+                       chunks={'time': 10}):
         """
         Initializes a new MPASprocessed object when given
         a 3-hourly GFS analysis file (netcdf)
@@ -111,7 +113,7 @@ class MPASprocessed(xarray.Dataset):
             print('File {} not found!'.format(infile))
             verf.download_gfsanl(idate, fdate, workdir)
             verf.convert_gfs_grb2nc(workdir, outfile=ncfile)
-        analyses = xarray.open_dataset(infile)
+        analyses = xarray.open_dataset(infile, chunks=chunks)
         analyses.__class__ = cls
         # Need to store date info, because it is not stored in the MPAS netcdf
         # metadata by default
@@ -209,6 +211,13 @@ class MPASprocessed(xarray.Dataset):
         newMPASproc.__setitem__('type', self.type)
         return newMPASproc
         
+#==== Meridionally average a field ==========================================
+    def hovmoller(self, field, lat_i=-15., lat_f=15.):
+        lats = self['lat'].values
+        yi = nearest_ind(lats, lat_i)
+        yf = nearest_ind(lats, lat_f) + 1
+        return self.isel(nLats=range(yi,yf))[field].mean(dim='nLats', keep_attrs=True)
+        
 #==== Compute the temporal average of a field ================================
     def compute_timemean(self, field, dt_i=None, dt_f=None):
         if dt_i is None or dt_f is None:
@@ -250,7 +259,8 @@ class MPASraw(xarray.Dataset):
     """Define a multivariate Dataset composed of MPAS forecast output."""
         
     @classmethod
-    def from_netcdf(cls, workdir, idate, dt, dropvars=[], outputstream='diag'):
+    def from_netcdf(cls, workdir, idate, dt, dropvars=[], outputstream='diag',
+                    chunks={'Time': 10}):
         """
         Initializes a new MPASraw object when given
         a list of MPAS output files (netcdf)
@@ -260,7 +270,8 @@ class MPASraw(xarray.Dataset):
         """
         assert isinstance(idate, datetime)
         ncfiles = '{}/{}.*.nc'.format(workdir, outputstream)
-        forecast = xarray.open_mfdataset(ncfiles, drop_variables=dropvars, concat_dim='Time')
+        forecast = xarray.open_mfdataset(ncfiles, drop_variables=dropvars, 
+                                         concat_dim='Time', chunks=chunks)
         forecast.__class__ = cls
         # Let's make sure that this MPAS output stream has cell/edge/vertex info
         for var in ['cellsOnCell', 'cellsOnEdge', 'cellsOnVertex']:
@@ -372,6 +383,46 @@ class MPASraw(xarray.Dataset):
         attrs = {dim : ind}
         return self[field].isel(**attrs).values
         
+    #==== Interpolate a field onto a regular lat/lon grid =========================
+    def interp_field(self, field, date, lats=np.arange(-90, 91, 1), 
+                     lons=np.arange(0, 360, 1)):
+        """ Adapted from mpas_contour_plot.py by Luke Madaus """
+        from matplotlib.mlab import griddata
+               
+        # First, figure out our cell/edge/vertex coordinates
+        if 'nCells' in self[field].dims:
+            flats = self['latCell'].values
+            flons = self['lonCell'].values
+        elif 'nEdges' in self[field].dims:
+            flats = self['latEdge'].values
+            flons = self['lonEdge'].values
+        elif 'nVertices' in self[field].dims:
+            flats = self['latVertex'].values
+            flons = self['lonVertex'].values
+        else:
+            raise ValueError("Unable to find lat/lon data for var: {}".format(field))
+            exit(1)
+        if 'Time' in self.dims:
+            flons = flons[0,:] * (180./np.pi) # rads 2 degrees
+            flats = flats[0,:] * (180./np.pi) # rads 2 degrees
+            assert len(np.shape(flons))==len(np.shape(flats))==1
+            
+        # If we have times, find only the desired time
+        if 'Time' not in self.dims:
+            curfield = self[field].values[:]
+        else:
+            time = nearest_ind(self.vdates(), date)
+            curfield = self[field].values[time,:]
+
+        # We now have lats, lons and values
+        # Now we just interpolate this to a regular grid
+        # at the highest resolution
+        dx = lons[1]-lons[0]
+        print('Interpolating {} to {:.01f}-deg grid'.format(field, dx))
+        gridded = griddata(flons, flats, curfield, lons, lats, interp='linear')
+        return gridded
+
+    
     #==== Function to save the xarray Dataset to a netcdf file ====================
     def save_to_disk(self, filename='{}/mpas_raw_forecast_{:%Y%m%d%H}.nc'):
         """ Dump this object to disk """

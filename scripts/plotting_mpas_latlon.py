@@ -35,13 +35,13 @@ def truncate_colormap(cmap, minval=0.0, maxval=1.0, n=100):
 
 #############################################################################################################
 
-def get_contour_levs(field, nlevs=8, zerocenter=False, maxperc=95):
+def get_contour_levs(field, nlevs=8, zerocenter=False, maxperc=99):
     """
     Computes/returns evenly-spaced integer contour values for a given field, 
     wherein the maximum contour value is the [maxperc]th percentile.
     """
-    perc_lo = np.percentile(field.flatten(), 100-maxperc)
-    perc_hi = np.percentile(field.flatten(), maxperc)
+    perc_lo = np.nanpercentile(field.flatten(), 100-maxperc)
+    perc_hi = np.nanpercentile(field.flatten(), maxperc)
     if zerocenter:
         maxperc = max(np.abs([perc_lo, perc_hi]))  #furthest from zero
         if (nlevs % 2 == 0): #even 
@@ -87,7 +87,48 @@ def draw_fig_axes(proj='orthoNP', mapcol='k', figsize=(12,10), twocb=False):
         cax = divider.append_axes('right', size='5%', pad=0.6)
         return fig, ax, cax, m
 
+
 #############################################################################################################
+        
+def simple_contourf(m, ax, cax, x, y, field, levs=None, cmap=color_map('ncar_temp'), varname=None,
+                    idate=None, vdate=None, units=None, cbar=True, div=False):
+    """
+    Takes a 2D field and produces a contourf plot on a map.
+    
+    Requires:
+    m --------> a Basemap object with the desired projection
+    ax -------> the axis object corresponding to m
+    cax ------> an axis object for the vertically-oriented colorbar
+    x, y -----> lat/lon coordinates projected onto Basemap m
+    field ----> a 2D numpy array
+    cmap -----> colormap
+    varname --> the name of the plotted variable
+    idate ----> forecast initialization date (datetime object)
+    vdate ----> forecast valid date (datetime object)
+    units ----> a string with the units of the field
+    cbar -----> plot the colorbar?
+    div ------> is this a diverging colormap? (neg/pos values centered at 0)
+    """
+    assert len(np.shape(field))==2
+    # get the contourf levels
+    if levs is None:
+        levs = get_contour_levs(field, nlevs=8, zerocenter=div)
+    
+    # contour fill
+    csf = m.contourf(x, y, field, levels=levs, cmap=cmap, extend='both')
+    if cbar: plt.colorbar(csf, cax=cax)
+    # Set titles
+    returns = [csf]
+    if idate is not None and vdate is not None and units is not None:
+        maintitle = '{} [{}]'.format(varname, units)
+        ax.text(0.0, 1.015, maintitle, transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
+        txt = ax.text(1.0, 1.01, 'valid: {:%Y-%m-%d %H:00}'.format(vdate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+        ax.text(1.0, 1.045, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+        returns.append(txt)
+    return returns    
+    #############################################################################################################
 
 def plot_vort_hgt(m, ax, cax, fcst_xry, plev, vlevs=np.arange(-0.2, 5.3, 0.1),
                   hgtintvl=60, cmap=color_map('ncar_temp'), 
@@ -247,7 +288,6 @@ def plot_precip_mslp(m, ax, cax, fcst_xry, plevs=[.005,.01,.02,.05,.1,.25,.5,.75
     if 'Time' in fcst.dims:
         fcst = fcst.isel(Time=np.where(fcst_xry.vdates()==vdate)[0][0])
     # mapped lat/lon locations
-    lon = fcst['lon'].values; lat = fcst['lat'].values
     x, y = fcst.project_coordinates(m)
     # contour fill the precip
     precip = fcst[precipvar].values * 0.0393701  # mm to inches
@@ -287,7 +327,6 @@ def plot_brightness_temp(m, ax, cax, fcst_xry, blevs=np.arange(-80, 41, 4),
     bcmap ----> colormap for brightness temp
     idate ----> forecast initialization date (datetime object)
     vdate ----> forecast valid date (datetime object)
-    units ----> a dictionary of units for the plotted variables
     cbar -----> plot the colorbar?
     """
     # MPAS variable names
@@ -301,7 +340,6 @@ def plot_brightness_temp(m, ax, cax, fcst_xry, blevs=np.arange(-80, 41, 4),
     if 'Time' in fcst.dims:
         fcst = fcst.isel(Time=np.where(fcst_xry.vdates()==vdate)[0][0])
     # mapped lat/lon locations
-    lon = fcst['lon'].values; lat = fcst['lat'].values
     x, y = fcst.project_coordinates(m)
     # calculate and contour fill the brightness temperature
     brightemp = (fcst[olrvar].values / 5.67e-8)**(1/4) - 273.15
@@ -320,3 +358,49 @@ def plot_brightness_temp(m, ax, cax, fcst_xry, blevs=np.arange(-80, 41, 4),
         returns.append(txt)
     return returns
 
+#############################################################################################################
+
+def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, 
+                   levs=[.005,.01,.02,.05,.1,.25,.5,0.75, 1.,1.5,2.,3.],
+                   cmap=color_map('ncar_precip'), idate=None, units=None, cbar=True):
+    import matplotlib.dates as mdates
+    
+    fcst = deepcopy(fcst_xry)
+    fcst.restructure_lons()
+    # average the field from lat_i to lat_f
+    hov = fcst.hovmoller(field, lat_i=slat, lat_f=nlat)
+    if 'prate' in field: 
+        hov *= 0.0393701 # mm to inches
+        cmap = nlcmap(cmap, levs)
+        
+    # plot the hovmoller, with time increasing downwards
+    x = fcst['lon'].values
+    y = fcst_xry.vdates()[::-1]
+    cs = ax.contourf(x, y, hov.values[::-1, :], levels=levs, cmap=cmap)
+    if cbar: plt.colorbar(cs, cax=cax)
+
+    # make the plot look nice
+    ax.set_xlim(x[0], x[-1])
+    ax.set_ylim(y[0], y[-1])
+    xticks = range(0, 361, 60)
+    ax.set_xticks(xticks)
+    xlabs = np.array(['{:3d}W'.format(360-l) if l>=180 else '{:3d}E'.format(l) for l in xticks])
+    xx = [i for i,xl in enumerate(xlabs) if xl.strip() in ['180E', '180W']]
+    xlabs[xx] = '180'
+    xx = [i for i,xl in enumerate(xlabs) if xl.strip() in ['0E', '0W']]
+    xlabs[xx] = '0'
+    ax.set_xticklabels(xlabs)
+    datesFmt = mdates.DateFormatter('%d %b')
+    days = mdates.DayLocator()
+    ax.yaxis.set_major_locator(days)
+    ax.yaxis.set_major_formatter(datesFmt)
+    ax.grid(color='k', alpha=0.5, linestyle='dashed', linewidth=0.5)
+    
+    # Set titles
+    if idate is not None and units is not None:
+        maintitle = '{} [{}] averaged from {}$^\circ$ to {}$^\circ$'
+        ax.text(0.0, 1.015, maintitle.format(field, units, int(slat), int(nlat)), 
+                transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
+        ax.text(1.0, 1.015, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+    return cs

@@ -7,6 +7,7 @@ Available datasets with this module:
 """
 
 import numpy as np
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from ftplib import FTP
 import os
@@ -108,7 +109,7 @@ def convert_gfs_grb2nc(workdir, nctable='gfs_verification.table', outfile='gfs_a
 def compute_spatial_error(field, fcst, anl, err='mae', 
                           lllat=-90, lllon=0, urlat=90, urlon=360):
     """
-    Computes the mean absolute error for a given field in a given domain. 
+    Computes the mean absolute error or bias for a given field in a given domain. 
     """
     from mpasoutput import nearest_ind
     
@@ -126,27 +127,105 @@ def compute_spatial_error(field, fcst, anl, err='mae',
             
     assert fcst[field].shape==anl[field].shape
     assert len(fcst[field].shape)==3
+      
+    # Compute the spatial error at each lead time
+    # This will be SLOW unless the data is divided into chunks 
+    # (see "chunks" option in MPASprocessed class, or on xarray.Dataset page)
         
-    # Compute the error  (need to iterate over Time, otherwise is VERY slow)
-    error = np.zeros(fcst.ntimes())
-    for t in range(fcst.ntimes()):
-        ffield = fcst[field].isel(Time=t, nLats=range(yi,yf),nLons=range(xi,xf)).values
-        afield = anl[field].isel(Time=t, nLats=range(yi,yf),nLons=range(xi,xf)).values
-        # Mean Absolute Error
-        if err.lower() == 'mae':
-            error[t] =  np.mean(np.abs(ffield - afield) * fcst.area_weights()[yi:yf,None])
-        # Bias
-        elif err.lower() == 'bias':
-            error[t] =  np.mean((ffield - afield) * fcst.area_weights()[yi:yf,None])
-        # Correlation
-        elif err.lower() in ['corr', 'ac', 'acc']:
-            raise ValueError("Haven't implemented correlation yet...")
-        else:
-            raise ValueError('"{}" is not a valid error parameter.'.format(err))
+    ffield = fcst[field].isel(nLats=range(yi,yf),nLons=range(xi,xf)).values
+    afield = anl[field].isel(nLats=range(yi,yf),nLons=range(xi,xf)).values
+    # Mean Absolute Error
+    if err.lower() == 'mae':
+        error =  (np.abs(ffield - afield) * fcst.area_weights()[None,yi:yf,None]).mean(axis=(1,2))
+    # Bias
+    elif err.lower() == 'bias':
+        error =  ((ffield - afield) * fcst.area_weights()[None,yi:yf,None]).mean(axis=(1,2))
+    # Correlation
+    elif err.lower() in ['corr', 'ac', 'acc']:
+        raise ValueError("Haven't implemented correlation yet...")
+    else:
+        raise ValueError('"{}" is not a valid error parameter.'.format(err))
+    
     return error
 
 ####################################################################################################
 
-def errormap(m, ax, cax, field, fcst, anl, clevs, cmap=color_map('posneg_2'),
-            idate=None, vdate=None, units=None, cbar=True, swaplons=False):
-    from plotting_mpas_latlon import get_countour_levs
+def compute_temporal_error(field, fcst, anl, err='mae', t1=None, t2=None):
+    """
+    Computes the mean absolute error or bias for a given field from 
+    time t1 to t2 at each grid point. 
+    """
+    from mpasoutput import nearest_ind
+    
+    assert fcst[field].shape==anl[field].shape
+    assert len(fcst[field].shape)==3
+    
+    if t1 is None or t2 is None:
+        ffield = fcst[field].values
+        afield = anl[field].values
+    else:
+        # find the desired time range
+        vdates = fcst.vdates()
+        i1 = nearest_ind(vdates, t1)
+        i2 = nearest_ind(vdates, t2)+1
+        ffield = fcst.isel(Time=range(i1,i2))[field].values
+        afield = anl.isel(Time=range(i1,i2))[field].values
+      
+    # Compute the temporal error at each grid point
+    # This will be SLOW unless the data is divided into chunks 
+    # (see "chunks" option in MPASprocessed class, or on xarray.Dataset page)
+
+    # Mean Absolute Error
+    if err.lower() == 'mae':
+        error =  (np.abs(ffield - afield)).mean(axis=(0))
+    # Bias
+    elif err.lower() == 'bias':
+        error =  ((ffield - afield)).mean(axis=(0))
+    # Correlation
+    elif err.lower() in ['corr', 'ac', 'acc']:
+        raise ValueError("Haven't implemented correlation yet...")
+    else:
+        raise ValueError('"{}" is not a valid error parameter.'.format(err))
+    
+    return error
+
+####################################################################################################
+
+def errormap(m, ax, cax, field, forecast, analysis, clevs, cmap=color_map('CBR_coldhot'),
+             idate=None, vdate=None, units=None, cbar=True, swaplons=False):
+    from copy import deepcopy
+    from plotting_mpas_latlon import get_contour_levs
+    import matplotlib
+    matplotlib.rcParams['contour.negative_linestyle'] = 'solid'
+    # If the projection (e.g., Mercator) crosses 180, we need to restructure the longitudes
+    fcst = deepcopy(forecast)
+    anl = deepcopy(analysis)
+    if swaplons: 
+        fcst.restructure_lons(); anl.restructure_lons()
+    # Select a time if fcst_xry contains multiple valid times
+    if 'Time' in fcst.dims:
+        fcst = fcst.isel(Time=np.where(forecast.vdates()==vdate)[0][0])
+        anl = anl.isel(Time=np.where(analysis.vdates()==vdate)[0][0])
+    # mapped lat/lon locations
+    x, y = fcst.project_coordinates(m)
+    # Plot the fields
+    cs1 = m.contour(x, y, fcst[field].values, levels=clevs, colors='darkgoldenrod', linewidths=2)
+    plt.clabel(cs1, np.array(cs1.levels[::2]).astype(int), fmt='%03d', inline=1, fontsize=10)
+    cs2 = m.contour(x, y, anl[field].values, levels=clevs, colors='darkgreen', linewidths=2)
+    plt.clabel(cs2, np.array(cs2.levels[::2]).astype(int), fmt='%03d', inline=1, fontsize=10)
+    # Plot the error
+    err = fcst[field].values - anl[field].values
+    flevs = get_contour_levs(err, zerocenter=True)
+    csf = m.contourf(x, y, err, levels=flevs, cmap=cmap, extend='both')
+    if cbar: plt.colorbar(csf, cax=cax, label='error [{}]'.format(units))
+    # Set titles
+    returns = [cs1, cs2, csf]
+    if idate is not None and vdate is not None and units is not None:
+        maintitle = 'forecast (orange) and analysis (green) {} [{}]'.format(field, units)
+        ax.text(0.0, 1.015, maintitle, transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
+        txt = ax.text(1.0, 1.01, 'valid: {:%Y-%m-%d %H:00}'.format(vdate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+        ax.text(1.0, 1.045, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+        returns.append(txt)
+    return returns
