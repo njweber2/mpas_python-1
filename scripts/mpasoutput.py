@@ -12,7 +12,12 @@ import os
 ###############################################################################################
 
 class MPASprocessed(xarray.Dataset):
-    """Define a multivariate Dataset composed of MPAS forecast output."""
+    """
+    Define a multivariate Dataset composed of MPAS forecast output.
+    
+    Below are a handful of different class methods to initialize an MPASprocessed
+    object from different datasets
+    """
         
     @classmethod
     def from_netcdf(cls, ncfile, idate, dt, chunks={'Time': 10}):
@@ -29,7 +34,7 @@ class MPASprocessed(xarray.Dataset):
         # Need to store date info, because it is not stored in the MPAS netcdf
         # metadata by default
         forecast['idate'] = idate  # initialization date
-        forecast['dt'] = dt        # output frequency (days)
+        forecast['dt'] = dt        # output frequency (hours)
         forecast['type'] = 'MPAS'
         return forecast
     
@@ -41,7 +46,7 @@ class MPASprocessed(xarray.Dataset):
         Initializes a new MPASprocessed object when given
         a desired lat/lon grid
         
-        raw MPAS diag.nc read and the data are interpolated to a regular
+        raw MPAS diag.nc data are interpolated to a regular
         lat/lon grid using the convert_mpas utility:
         https://github.com/mgduda/convert_mpas/
         
@@ -68,10 +73,10 @@ class MPASprocessed(xarray.Dataset):
             with open('{}/target_domain'.format(workdir) ,'w') as target:
                 target.write('nlat={}\n'.format(len(lats)))
                 target.write('nlon={}\n'.format(len(lons)))
-                target.write('startlat={:.01f}\n'.format(lats[0]))
-                target.write('startlon={:.01f}\n'.format(lons[0]))
-                target.write('endlat={:.01f}\n'.format(lats[-1]))
-                target.write('endlon={:.01f}\n'.format(lons[-1]))
+                target.write('startlat={:.01f}\n'.format(lats[0]-0.25))
+                target.write('startlon={:.01f}\n'.format(lons[0]-0.25))
+                target.write('endlat={:.01f}\n'.format(lats[-1]+0.25))
+                target.write('endlon={:.01f}\n'.format(lons[-1]+0.25))
 
             # Now build and execute our convert_mpas command
             if os.path.isfile('{}/latlon.nc'.format(workdir)):
@@ -91,36 +96,131 @@ class MPASprocessed(xarray.Dataset):
         # Need to store date info, because it is not stored in the MPAS netcdf
         # metadata by default
         forecast['idate'] = idate  # initialization date
-        forecast['dt'] = dt        # output frequency (days)
+        forecast['dt'] = dt        # output frequency (hours)
         forecast['type'] = 'MPAS'
         return forecast
 
     @classmethod
     def from_GFS_netcdf(cls, workdir, idate, fdate, ncfile='gfs_analyses.nc',
-                       chunks={'time': 10}):
+                        chunks={'time': 10}):
         """
         Initializes a new MPASprocessed object when given
         a 3-hourly GFS analysis file (netcdf)
+        
+        workdir -----> string path to the input/output
+        ncfile ------> netcdf of GFS analyses to be loaded via xarray
         """
         import os
         import verification as verf
-        infile = '{}/{}'.format(workdir, ncfile)
+        infile = '{}/GFS_ANL/{}'.format(workdir, ncfile)
+        # Has the netcdf file already been created?
         if not os.path.isfile(infile):
+            # If not, download the gribs via ftp and convert them to netcdf
             print('File {} not found!'.format(infile))
             verf.download_gfsanl(idate, fdate, workdir)
             verf.convert_gfs_grb2nc(workdir, outfile=ncfile)
+        # Load the netcdf as an xarray Dataset
         analyses = xarray.open_dataset(infile, chunks=chunks)
         analyses.__class__ = cls
         # Need to store date info, because it is not stored in the MPAS netcdf
         # metadata by default
         analyses['idate'] = idate  # initialization date
-        analyses['dt'] = 3        # output frequency (days)
+        analyses['dt'] = 3        # output frequency (hours)
         analyses['type'] = 'GFS'
         # Rename the coordinates/dims so the functions below still work
         analyses.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
         analyses.update(analyses.assign(lat=analyses.variables['nLats']))
         analyses.update(analyses.assign(lon=analyses.variables['nLons']))
         return analyses
+    
+    @classmethod
+    def from_TRMM_hdfs(cls, workdir, idate, fdate, ftpusername):
+        """
+        Initializes a new MPASprocessed object from a directory of
+        3-hourly TRMM 3B42RT precipitation hdf files
+        
+        workdir -----> string path to the input/output
+        ftpusername -> PPS email account (string) for downloading TRMM/GPM data via ftp
+        """
+        from subprocess import check_output
+        import verification as verf
+        
+        trmmdir = '{}/TRMM_3B42RT'.format(workdir)
+        
+        # Is the data already downloaded?
+        if not os.path.isdir(trmmdir):
+            # If not, download the hdfs via ftp
+            print('TRMM directory not found!')
+            verf.download_trmm_3b42rt(ftpusername, idate, fdate, workdir)
+        # list the hdf files
+        trmmfiles = check_output(['ls -1a {}/*.HDF'.format(trmmdir)], shell=True).split()
+        # load the just the precipitation variable from each file
+        varlist = []
+        for f, file in enumerate(trmmfiles):
+            trmmxry = xarray.open_dataset(file.decode('utf8')).rename({'nlat' : 'nLats', 'nlon' : 'nLons'})
+            varlist.append(trmmxry.data_vars['precipitation'])
+        # concatenate and rearrange the precip variable DataArrays
+        precip = xarray.concat(varlist, dim='Time').transpose('Time','nLats','nLons')
+        precip = precip.where(precip!=-9999.9)
+        # The lat and lon should be calculated manually.
+        # More information can be found at:
+        # http://disc.sci.gsfc.nasa.gov/additional/faq/precipitation_faq.shtml#lat_lon
+        lat = xarray.DataArray(np.arange(-49.875, 49.876, 0.25), dims='nLats')
+        lon = xarray.DataArray(np.arange(-179.875, 179.876, 0.25), dims='nLons')
+
+        # Create an xarray Dataset and compute 3-hourly precipitation
+        trmm = xarray.Dataset({'preciprate' : precip, 'lat' : lat, 'lon' : lon})
+        prate3h = trmm['preciprate'].shift(Time=1)*3
+        trmm.update(trmm.assign(prate3h=prate3h))
+        trmm.__class__ = cls
+        # Need to store date info, because it is not stored in the MPAS netcdf
+        # metadata by default
+        trmm['idate'] = idate  # initialization date
+        trmm['dt'] = 3         # output frequency (hours)
+        trmm['type'] = 'TRMM'
+        return trmm
+
+    @classmethod
+    def from_GPM_hdfs(cls, workdir, idate, fdate, ftpusername, ncfile='gpm.nc'):
+        """
+        Initializes a new MPASprocessed object from a directory of
+        half-hourly GPM IMERG precipitation hdf files
+        
+        workdir -----> string path to the input/output
+        ftpusername -> PPS email account (string) for downloading TRMM/GPM data via ftp
+        """
+        import verification as verf
+        import h5py
+        
+        gpmdir = '{}/GPM_IMERG'.format(workdir)
+        
+        # Do we need to process the HDF data?
+        if not os.path.isfile('{}/{}'.format(gpmdir,ncfile)):
+            precip, lat, lon = verf.process_gpm_imerg(ftpusername, idate, fdate, 
+                                                      workdir, ncfile)
+        # otherwise, load from pre-processed netcdf
+        else:
+            print('Loading from {}/{}'.format(gpmdir, ncfile))
+            dset = xarray.open_dataset('{}/{}'.format(gpmdir, ncfile))
+            precip = dset['precip']
+            lat = dset['lat']
+            lon = dset['lon']
+            
+        # compute hourly and 3-hourly precipitation
+        prate1h = (precip.shift(Time=1)*0.5 + precip.shift(Time=2)*0.5)[::2,:,:]
+        prate3h = prate1h + prate1h.shift(Time=1) + prate1h.shift(Time=2)
+
+        # Create an xarray Dataset with the above variables
+        gpm = xarray.Dataset({'prate1h' : prate1h, 'prate3h' : prate3h,
+                              'lat' : lat, 'lon' : lon})
+
+        gpm.__class__ = cls
+        # Need to store date info, because it is not stored in the MPAS netcdf
+        # metadata by default
+        gpm['idate'] = idate  # initialization date
+        gpm['dt'] = 1         # output frequency (hours)
+        gpm['type'] = 'GPM'
+        return gpm
     
     # For adding the "idate" and "dt" items above
     def __setitem__(self, key, value):
@@ -198,7 +298,7 @@ class MPASprocessed(xarray.Dataset):
         return m(lo, la)
     
 #==== Resample the fields temporally and returns the coarsened xarray =======
-    def temporally_coarsen(self, new_dt):
+    def coarsen_temporally(self, new_dt):
         assert new_dt % self.dt == 0
         dt_ratio = int(new_dt / self.dt)
         newMPASproc = self.isel(Time=np.arange(self.ntimes())[::dt_ratio])
@@ -207,14 +307,46 @@ class MPASprocessed(xarray.Dataset):
         newMPASproc.__setitem__('type', self.type)
         return newMPASproc
         
+#==== Resamples the lat/lon grid by averaging within coarser grid boxes =====
+    def coarsen_grid(self, newlats, newlons):
+        """ 
+        Uses xarray's powerful groupby tool to bin the lat/lon data into coarser
+        lat/lon grid boxes (or "bins") and then average each bin to conservatively
+        coarsen the data.
+        """
+        # get our lat/lon spacing and bins
+        dx = newlats[1] - newlats[0]  # assuming uniform lat/lon grid
+        # bin arrays are 1 element longer than lat/lon arrays, with the center
+        # of each bin being the newlat/newlon value
+        lat_bins = np.append(newlats-dx/2, newlats[-1]+dx/2)
+        lon_bins = np.append(newlons-dx/2, newlons[-1]+dx/2)
+
+        # average within the latitude bins
+        newMPASproc = self.groupby_bins('lat', lat_bins, labels=newlats).mean(dim='nLats')
+        # trim off the extra dimension added to lon                
+        newMPASproc = newMPASproc.assign(lon=newMPASproc['lon'].isel(lat_bins=0).drop('lat_bins'))
+        # average within the longitude bins
+        newMPASproc = newMPASproc.groupby_bins('lon', lon_bins, labels=newlons).mean(dim='nLons')
+        # trim off the extra dimension added to lat
+        newMPASproc = newMPASproc.assign(lat=newMPASproc['lat'].isel(lon_bins=0).drop('lon_bins'))
+        # rename/reorganize the dimensions
+        newMPASproc = newMPASproc.rename({'lat_bins' : 'nLats' , 'lon_bins' : 'nLons'})
+        newMPASproc = newMPASproc.transpose('Time','nLats','nLons')
+        newMPASproc.__class__ = self.__class__
+        newMPASproc.__setitem__('dt', self.dt)
+        newMPASproc.__setitem__('idate', self.idate)
+        newMPASproc.__setitem__('type', self.type)
+        return newMPASproc
+                               
 #==== Meridionally average a field ==========================================
     def hovmoller(self, field, lat_i=-15., lat_f=15.):
         lats = self['lat'].values
         yi = nearest_ind(lats, lat_i)
         yf = nearest_ind(lats, lat_f) + 1
-        return self.isel(nLats=range(yi,yf))[field].mean(dim='nLats', keep_attrs=True)
+        subset = self.isel(nLats=range(yi,yf))[field] * self.area_weights()[yi:yf]
+        return subset.mean(dim='nLats', keep_attrs=True)
         
-#==== Compute the temporal average of a field ================================
+#==== Average a field between two times =====================================
     def compute_timemean(self, field, dt_i=None, dt_f=None):
         if dt_i is None or dt_f is None:
             return self[field].mean(dim='Time', keep_attrs=True)
@@ -222,6 +354,26 @@ class MPASprocessed(xarray.Dataset):
             ti = nearest_ind(self.vdates, dt_i)
             tf = nearest_ind(self.vdates, dt_f) + 1
             return self.isel(Time=range(ti,tf))[field].mean(dim='Time', keep_attrs=True)
+        
+#==== Fetch the data from a subset of the grid ===============================
+    def subset(self, field, ll=(-90, -80), ur=(90, 360), aw=False):
+        lats, lons = self.latlons()
+        yi = nearest_ind(lats, ll[0])
+        yf = nearest_ind(lats, ur[0]) + 1
+        xi = nearest_ind(lons, ll[1])
+        xf = nearest_ind(lons, ur[1]) + 1
+        subset = self[field].isel(nLats=range(yi,yf), nLons=range(xi,xf))
+        if aw:
+            return subset * self.area_weights()[None,yi:yf,None]
+        else:
+            return subset
+        
+#==== Average a field within some spacial domain =============================
+    def spatial_average(self, field, lat_i=-90, lat_f=90, lon_i=-180, lon_f=360):
+        """ Default: global mean """
+        
+        subset = self.subset(field, ll=(lat_i, lon_i), ur=(lat_f, lon_f), aw=True)
+        return subset.mean(dim=('nLats','nLons'), keep_attrs=True)
     
 #==== Get the timeseries of a given field at the desired lat/lon =============
     def get_timeseries(self, field, loc, verbose=False):
