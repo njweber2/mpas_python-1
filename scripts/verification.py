@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Functions for downloading/processing verification dataset.
+Functions for downloading/processing verification datasets.
 
 Available datasets with this module:
 - GFS analyses (0.5 deg, 3-hourly)
@@ -13,9 +13,11 @@ from ftplib import FTP
 import os
 from color_maker.color_maker import color_map
 
-####################################################################################################
+#############################################################################################################
+### SECTION FOR HANDLING GFS GLOBAL ANALYSES ################################################################
+#############################################################################################################
 
-def download_gfsanl(idate, fdate, dpath):
+def download_gfsanl(idate, fdate, workdir, verbose=False):
     """
     Downloads all the 3-hourly GFS analyses (via the NOMADS server) 
     from [idate] through [fdate] to the location [dpath].
@@ -42,7 +44,7 @@ def download_gfsanl(idate, fdate, dpath):
             if file[-8:] not in ['000.grb2', '003.grb2']:
                 continue
             # this is where we will download the file
-            local_filename = '{}/{}'.format(dpath, file)
+            local_filename = '{}/GFS_ANL/{}'.format(workdir, file)
             
             # get datetime info for this file's analysis
             fy = int(file[9:13]); fm = int(file[13:15]); fd = int(file[15:17])
@@ -51,11 +53,11 @@ def download_gfsanl(idate, fdate, dpath):
             
             # check if we already have the file
             if os.path.isfile(local_filename):
-                print('File already exists:\n{}'.format(local_filename))
+                if verbose: print('File already exists:\n{}'.format(local_filename))
             # check if this analysis is within our desired time range
             elif idate <= file_dt <= fdate:
                 # DOWNLOAD!
-                print('Downloading {}...'.format(file))
+                if verbose: print('Downloading {}...'.format(file))
                 lf = open(local_filename, "wb")
                 ftp.retrbinary("RETR " + file, lf.write)
                 lf.close()
@@ -74,17 +76,18 @@ def convert_gfs_grb2nc(workdir, nctable='gfs_verification.table', outfile='gfs_a
     from subprocess import check_output, Popen
     
     # Check if the netcdf already exists
-    ncoutfile = '{}/{}'.format(workdir, outfile)
+    ncoutfile = '{}/GFS_ANL/{}'.format(workdir, outfile)
     if os.path.isfile(ncoutfile):
         print('GFS netCDF file already exists!')
         return
+    print('Converting GFS gribs to netcdf')
     
     # Point to the nc_table
-    tablefile = '{}/{}'.format(workdir, nctable)
+    tablefile = '{}/GFS_ANL/{}'.format(workdir, nctable)
     assert os.path.isfile(tablefile)
     
     # List the gribs to be converted
-    gfsgrbs = check_output(['ls -1a {}/gfsanl*.grb2'.format(workdir)], shell=True).split()
+    gfsgrbs = check_output(['ls -1a {}/GFS_ANL/gfsanl*.grb2'.format(workdir)], shell=True).split()
     gfsgrbs = [g.decode("utf-8") for g in gfsgrbs]
     
     # Get the -append keyword (variable info) from the nctable comments (line 15)
@@ -104,7 +107,180 @@ def convert_gfs_grb2nc(workdir, nctable='gfs_verification.table', outfile='gfs_a
         Popen([wgribcommand], shell=True).wait()
     return
 
+#############################################################################################################
+### SECTION FOR HANDLING SATELLITE-DERIVED PRECIPITATION ####################################################
+#############################################################################################################
+
+def download_gpm_imerg(username, idate, fdate, workdir, verbose=False):
+    """
+    Downloads all the 0.1deg, half-hourly GPM IMERG data (via NASA ftp) 
+    from [idate] through [fdate] to the location [workdir].
+    
+    [username] corresponds to your registered PPM account
+    
+    Example file format:
+    3B-HHR-L.MS.MRG.3IMERG.20170401-S000000-E002959.0000.V04A.RT-H5
+    """
+    from subprocess import Popen
+            
+    # create a list of tuples specifying the yr, mon, and day of each day in the forecast
+    dts = [(dt.year, dt.month, dt.day) for dt in [idate+timedelta(days=d) for d in \
+                                                  range((fdate-idate).days + 1)]]
+    # our download directory:
+    if not os.path.isdir('{}/GPM_IMERG'.format(workdir)):
+        Popen(['mkdir {}/GPM_IMERG'.format(workdir)], shell=True).wait()
+    
+    # login
+    ftp = FTP("jsimpson.pps.eosdis.nasa.gov", username, username)
+    
+    print('Downloading GPM data from {:%Y%m%d%H} through {:%Y%m%d%H}'.format(idate, fdate))
+    # loop through all the desired days
+    for dt in dts:
+        y, m, d = dt
+        # cd to directory
+        yyyymm = '{:04d}{:02d}'.format(y, m)
+        ftp.cwd("/NRTPUB/imerg/late/{}".format(yyyymm))
+        
+        # which files do we want?
+        files = []
+        ftp.retrlines("NLST", files.append)
+        for file in files:
+            
+            # ignore subdirectories
+            if len(file) < 40: continue
+                
+            # get datetime info for each file
+            fd = int(file[-34:-32])
+            if fd != d: continue # must be on the desired day
+            hhmmss = file[-30:-24]
+            fh = int(hhmmss[:2])
+            fm = int(hhmmss[2:4])
+
+            file_dt = datetime(y, m, fd, fh, fm)
+            
+            # this is where we will download the file
+            local_filename = '{}/GPM_IMERG/{}'.format(workdir, file)
+            
+            # check if we already have the file
+            if os.path.isfile(local_filename):
+                if verbose: print('File already exists:\n{}'.format(local_filename))
+            # check if this analysis is within our desired time range
+            elif idate <= file_dt <= fdate:
+                # DOWNLOAD!
+                if verbose: print('Downloading {}...'.format(file))
+                lf = open(local_filename, "wb")
+                ftp.retrbinary("RETR " + file, lf.write)
+                lf.close()
+    ftp.close()
+    return
+
 ####################################################################################################
+
+def process_gpm_imerg(ftpusername, idate, fdate, workdir, ncfile):
+    """ Loads GPM IMERG hdfs and stores as xarray/netcdf """
+    from subprocess import check_output
+    import h5py
+    import xarray
+    
+    gpmdir = '{}/GPM_IMERG'.format(workdir)
+    # Is the data already downloaded?
+    if not os.path.isdir(gpmdir):
+        # If not, download the hdfs via ftp
+        print('GPM directory not found!')
+        download_gpm_imerg(ftpusername, idate, fdate, workdir)
+    # list the hdf files
+    gpmfiles = check_output(['ls -1a {}/*H5'.format(gpmdir)], shell=True).split()
+
+    # load the just the precipitation variable from each file
+    varlist = [None] * len(gpmfiles)
+    print('Reading GPM hdf5 files...')
+    for f, file in enumerate(gpmfiles):
+        if (f+1) % 50 == 0: print(' {} of {}'.format(f+1, len(gpmfiles)))
+        # Use h5py to load the precip data
+        gpmf = h5py.File(file.decode('utf8'), 'r')
+        prec = gpmf['Grid/precipitationCal'][:]
+        if f==0:
+            lats = np.around(gpmf['Grid/lat'][:].astype(float), 2)
+            lons = np.around(gpmf['Grid/lon'][:].astype(float), 2)
+        gpmf.close()
+        # Store the precip data as a DataArray
+        varlist[f] = xarray.DataArray(prec, dims=('nLons','nLats'))
+
+    # concatenate and rearrange the precip variable DataArrays
+    precip = xarray.concat(varlist, dim='Time').transpose('Time','nLats','nLons')
+    precip = precip.where(precip!=-9999.9)
+    # Create lat/lon variables
+    lat = xarray.DataArray(lats, dims='nLats')
+    lon = xarray.DataArray(lons, dims='nLons')
+    # Write to netcdf
+    dset = xarray.Dataset({'precip' : precip, 'lat' : lat, 'lon' : lon})
+    dset.to_netcdf('{}/{}'.format(gpmdir, ncfile))
+    return precip, lat, lon
+
+####################################################################################################
+
+def download_trmm_3b42rt(username, idate, fdate, workdir, verbose=False):
+    """
+    Downloads all the 0.25deg, 3-hourly TRMM 3B42RT data (via NASA ftp) 
+    from [idate] through [fdate] to the location [workdir].
+    
+    [username] corresponds to your registered PPM account
+    
+    Example file format:
+    3B42.20170212.21.7.HDF.gz
+    """
+    from subprocess import Popen
+            
+    # create a list of tuples specifying the yr, mon, and day of each day in the forecast
+    dts = [(dt.year, dt.month, dt.day) for dt in [idate+timedelta(days=d) for d in \
+                                                  range((fdate-idate).days + 1)]]
+    # our download directory:
+    if not os.path.isdir('{}/TRMM_3B42RT'.format(workdir)):
+        Popen(['mkdir {}/TRMM_3B42RT'.format(workdir)], shell=True).wait()
+    
+    # login
+    ftp = FTP("arthurhou.pps.eosdis.nasa.gov", username, username)
+    
+    print('Downloading TRMM data from {:%Y%m%d%H} through {:%Y%m%d%H}'.format(idate, fdate))
+    # loop through all the desired days
+    for dt in dts:
+        y, m, d = dt
+        # cd to directory
+        ftp.cwd("/trmmdata/ByDate/V07/{:04d}/{:02d}/{:02d}".format(y,m,d))
+        
+        # which files do we want?
+        files = []
+        ftp.retrlines("NLST", files.append)
+        for file in files:
+            # ignore subdirectories
+            if len(file) < 25: continue
+                
+            # get datetime info for each file
+            fh = int(file[-11:-9])
+
+            file_dt = datetime(y, m, d, fh)
+            
+            # this is where we will download the file
+            local_filename = '{}/TRMM_3B42RT/{}'.format(workdir, file)
+            
+            # check if we already have the file
+            if os.path.isfile(local_filename.split('.gz')[0]):
+                if verbose: print('File already exists:\n{}'.format(local_filename))
+            # check if this analysis is within our desired time range
+            elif idate <= file_dt <= fdate:
+                # DOWNLOAD!
+                if verbose: print('Downloading {}...'.format(file))
+                lf = open(local_filename, "wb")
+                ftp.retrbinary("RETR " + file, lf.write)
+                lf.close()
+                # unzip
+                Popen(['gunzip {}'.format(local_filename)], shell=True).wait()
+    ftp.close()
+    return
+
+#############################################################################################################
+### OTHER VERIFICATION TOOLS ################################################################################
+#############################################################################################################
 
 def compute_spatial_error(field, fcst, anl, err='mae', 
                           lllat=-90, lllon=0, urlat=90, urlon=360):
@@ -116,15 +292,8 @@ def compute_spatial_error(field, fcst, anl, err='mae',
     # Get the lat/lon indices for the desired domain
     lats, lons = fcst.latlons()
     alats, alons = anl.latlons()
-    assert (lats==alats).all()
-    assert (lons==alons).all()
-    if (lons < 0).any():
-        raise ValueError('ERROR: longitudes must be from 0 to 360.')
-    yi = nearest_ind(lats, lllat)
-    yf = nearest_ind(lats, urlat)+1
-    xi = nearest_ind(lons, lllon)
-    xf = nearest_ind(lons, urlon)+1
-            
+    assert (np.shape(lats)==np.shape(alats))
+    assert (np.shape(lons)==np.shape(alons))
     assert fcst[field].shape==anl[field].shape
     assert len(fcst[field].shape)==3
       
@@ -132,14 +301,14 @@ def compute_spatial_error(field, fcst, anl, err='mae',
     # This will be SLOW unless the data is divided into chunks 
     # (see "chunks" option in MPASprocessed class, or on xarray.Dataset page)
         
-    ffield = fcst[field].isel(nLats=range(yi,yf),nLons=range(xi,xf)).values
-    afield = anl[field].isel(nLats=range(yi,yf),nLons=range(xi,xf)).values
+    ffield = fcst.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True).values
+    afield = anl.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True).values
     # Mean Absolute Error
     if err.lower() == 'mae':
-        error =  (np.abs(ffield - afield) * fcst.area_weights()[None,yi:yf,None]).mean(axis=(1,2))
+        error = np.abs(ffield - afield).mean(axis=(1,2))
     # Bias
     elif err.lower() == 'bias':
-        error =  ((ffield - afield) * fcst.area_weights()[None,yi:yf,None]).mean(axis=(1,2))
+        error =  (ffield - afield).mean(axis=(1,2))
     # Correlation
     elif err.lower() in ['corr', 'ac', 'acc']:
         raise ValueError("Haven't implemented correlation yet...")
