@@ -29,3 +29,9 @@ To Do:
 
 --> Add GPM IMERG precipitation to the verification datasets
 
+--> Add NCEP reanalyses to the verification datasets
+
+--> Start writing MJO/tropical convection evaluation tools
+
+--> Write method for temporally averaging the forecasts (e.g., week-1, week-2,...)
+
