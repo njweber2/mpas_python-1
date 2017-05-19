@@ -27,8 +27,6 @@ To Do:
 
 --> Add more plotting functions to a) plotting_mpas_mesh.py and b) plotting_mpas_latlon.py
 
---> Add GPM IMERG precipitation to the verification datasets
-
 --> Add NCEP reanalyses to the verification datasets
 
 --> Start writing MJO/tropical convection evaluation tools
