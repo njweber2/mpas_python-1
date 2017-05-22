@@ -27,6 +27,10 @@ To Do:
 
 --> Add more plotting functions to a) plotting_mpas_mesh.py and b) plotting_mpas_latlon.py
 
+--> Rename classes in mpasoutput
+
+--> Add operational and reforecast CFSv2 capabilities
+
 --> Add NCEP reanalyses to the verification datasets
 
 --> Start writing MJO/tropical convection evaluation tools
