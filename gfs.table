@@ -1,0 +1,78 @@
+# File name: gfs_verification.table
+# Description: Specifies parameters for conversion to Netcdf format
+# 3-hourly analyses and forecasts of JMA MSM system as best suited to
+# my purposes: forcing of ocean model and reference data for analysis
+# of meteorological conditions with GrADS-based visualization tools.
+# Nick Weber, May 2017
+#
+$lev_type  100:p:pressure level:mb:0.01
+$nlev      2
+$levs  500 200
+$grads 1
+
+# Include this in the wgrib2 command:
+# MAKE SURE THIS "-match" LINE ALWAYS REMAINS ON LINE 15 OF THIS TEXT FILE!!
+#-match ":(UGRD|VGRD|HGT|ABSV|PRMSL|PRES|TMP|RH|PWAT):"
+
+
+# ==== WANT THESE ======
+UGRD:500 mb:uzonal_500hPa
+VGRD:500 mb:umeridional_500hPa
+UGRD:10 m above ground:u10
+VGRD:10 m above ground:v10
+HGT:500 mb:height_500hPa
+HGT:200 mb:height_200hPa
+ABSV:500 mb:vorticity_500hPa
+PRMSL:mean sea level:mslp
+PRES:surface:psfc
+TMP:2 m above ground:t2m
+RH:2 m above ground:rh2m
+PWAT:entire atmosphere (considered as a single layer):precipw
+
+
+# ==== IGNORE REST =====
+UGRD:*:ignore
+VGRD:*:ignore
+HGT:*:ignore
+ABSV:*:ignore
+PRMSL:*:ignore
+PRES:*:ignore
+TMP:*:ignore
+RH:*:ignore
+
+# End of file
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#UGRD:*:uzonal
+#VGRD:*:umeridional
+#HGT:*:height
+#ABSV:*:vorticity
+##RH:*:rh:short:-2:110
+##VVEL:*:omega
+##TMP:*:temp
+##
+## JMA MSM model surface data conversion rules
+##
+#PRMSL:mean sea level:mslp
+#PRES:surface:psfc
+#UGRD:10 m above ground:u10
+#VGRD:10 m above ground:v10
+#TMP:1.5 m above ground:t2m
+#RH:1.5 m above ground:rh2m:short:-5:110
+## End of file
