@@ -14,6 +14,262 @@ import os
 from color_maker.color_maker import color_map
 
 #############################################################################################################
+### GENERAL TOOLS ###########################################################################################
+#############################################################################################################
+
+def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None,
+                   isanalysis=True):
+    """
+    Converts downloaded NCEP gribs (forecasts or analyses) to netcdf, 
+    retaining only the dates, forecast types, and variables designated 
+    in nctable file and the -match keyword
+    
+    If each grb2 file contains a different variable (like CFS), two netcdfs are created:
+       one with all the gaussian-grid variables and one with the latlon-grid variables
+       
+    If each grb2 file contains all variables at a different time (like GFS), then just
+       one netcdf is created (because everything is on the same latlon grid)
+    
+    Requires the wgrib2 utility.
+    """
+    from subprocess import check_output, Popen
+    import time
+    from mpasoutput import timedelta_hours
+        
+    # Point to the nc_table
+    tablefile = '{}/{}'.format(ncdir, nctable)
+    assert os.path.isfile(tablefile)
+    
+    # List the gribs to be converted
+    grbfiles = check_output(['ls -1a {}/*.grb2'.format(ncdir)], shell=True).split()
+    grbfiles = [g.decode("utf-8") for g in grbfiles]
+    
+    # Use the -match keyword to select the desired dates
+    with open(tablefile, "r") as tfile:
+        for l, line in enumerate(tfile):
+            if l==14:
+                matchtag = line[1:].rstrip()
+                break
+    if isanalysis:
+        # Match tags for CFSR analyses
+        matchtag += ' -match ":(anl|0-0 day ave fcst):"'
+        # Add another -match tag for the desired date range
+        if daterange is not None:
+            idate = daterange[0]; fdate = daterange[1]
+            currdate = idate
+            matchtag2 = '-match ":('
+            while currdate <= fdate:
+                matchtag2 += 'd={:%Y%m%d%H}'.format(currdate)
+                currdate += timedelta(hours=6)
+                if currdate <= fdate: matchtag2 += '|'
+            matchtag2 += '):"'
+            matchtag = '{} {}'.format(matchtag, matchtag2)      
+            
+    else:
+        assert daterange is not None
+        # Match tags for CFSv2 forecasts (should include the init analysis)
+        matchtag += ' -match ":d={:%Y%m%d%H}:"'.format(daterange[0])
+        # Add another -match tag for the desired date range
+        dhours = timedelta_hours(daterange[0], daterange[1])
+        matchtag2 = '-match ":('
+        for h in range(0, dhours+1, 6):
+            matchtag2 += '{} hour fcst'.format(h)
+            if h < dhours: matchtag2 += '|'
+        matchtag2 += '):"'
+        matchtag = '{} {}'.format(matchtag, matchtag2)      
+                
+    # Convert the gribs and append them to the same netcdf output file
+    # First, if there is only one variable in each grib file, we need to separate the 
+    # gribs by their grid structure. That is, we will combine all the gaussian
+    # variables in to one netcdf, and all the latlon variables into another
+    gaussvars = ['prate', 'pwat', 'ulwtoa', 'pressfc', 'tmpsfc', 'tmp2m', 'wnd2m']
+    gaussgribs = []
+    latlongribs = []
+    for grbfile in grbfiles:
+        # check the filename to see if it contains a gaussian-grid variable
+        if any([gv in grbfile for gv in gaussvars]):
+            gaussgribs.append(grbfile)
+        else:
+            latlongribs.append(grbfile)
+            
+    # Check if the netcdf already exists
+    gauss_ncout = '{}/gaussian_{}'.format(ncdir, outfile)
+    latlon_ncout = '{}/latlon_{}'.format(ncdir, outfile)
+    griblists = []
+    ncouts = []
+    if os.path.isfile(gauss_ncout):
+        print('gaussian grid netCDF file already exists!')
+    else:
+        griblists.append(gaussgribs)
+        ncouts.append(gauss_ncout)
+    if os.path.isfile(latlon_ncout):
+        print('latlon grid netCDF file already exists!')
+    else:
+        griblists.append(latlongribs)
+        ncouts.append(latlon_ncout)
+            
+    # NOW convert to netcdf
+    if len(griblists) > 0: print('Converting gribs to netcdf')
+    start = time.time()
+    gg = 0
+    for grbs, ncoutfile in zip(griblists, ncouts):
+        for grbfile in grbs[::-1]:
+            print('converting grib {} of {}...'.format(gg+1, len(grbfiles)))
+            print(grbfile) #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            wgribcommand = 'wgrib2 {} {} -nc_table {} -netcdf {}'.format(grbfile, matchtag,
+                                                                 tablefile, ncoutfile)
+            if isanalysis and ('pwat' in grbfile or 'pressfc' in grbfile):
+                wgribcommand = 'wgrib2 {} -checksum 3 | grep "sec3_cksum=795884006" | ' +\
+                               'wgrib2 {} -i {} -nc_table {} -netcdf {}'
+                wgribcommand = wgribcommand.format(grbfile, grbfile, matchtag, tablefile, ncoutfile)
+            if os.path.isfile(ncoutfile):
+                splits = wgribcommand.split('-nc_table')
+                wgribcommand = splits[0] + '-append -nc_table' + splits[1]
+            Popen([wgribcommand], shell=True).wait()
+            gg += 1
+    end = time.time()
+    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    return
+
+#############################################################################################################
+### SECTION FOR HANDLING OPERATIONAL/RETROSPECTIVE CFSv2 FORECASTS/ANALYSES #################################
+#############################################################################################################
+cfs_vars = ['chi200', 'prate', 'pressfc', 'prmsl', 'psi200', 'pwat', 'tmp2m', 't500',
+           't850', 'tmpsfc', 'ulwtoa', 'wnd10m', 'wnd200', 'wnd500', 'wnd850', 
+           'z1000', 'z500', 'z850', 'z200', 'vvel500', 'psi500']
+
+def download_cfsrr(idate, fdate, workdir, verbose=False, anlonly=False):
+    """
+    Downloads CFSv2 reforecasts (initalized on idate) and 
+    corresponding analyses (CFSR; from idate to fdate)
+    
+    """
+    from urllib.request import urlretrieve
+    import time
+    
+    if not os.path.isdir('{}/CFS'.format(workdir)):
+        os.system('mkdir {}/CFS'.format(workdir))
+    
+    #==== First download the reanalyses ========================================
+    print('\n==== Downloading CFSR reanalyses ====')
+    nomads = 'https://nomads.ncdc.noaa.gov/data/cfsr'
+    start = time.time()
+    
+    # create a list of tuples specifying the years and months encompassed
+    # in the desired date range
+    dts = list(set([(dt.year, dt.month) for dt in [idate+timedelta(days=d) for d in \
+                                                   range((fdate-idate).days + 1)]]))
+    for y,m in dts:
+        for var in cfs_vars:
+            # Download the forecast of each desired variable
+            yyyymm = '{:04d}{:02d}'.format(y, m)
+            url = '{}/{}/{}.gdas.{}.grb2'.format(nomads, yyyymm, var, yyyymm)
+            localfile = '{}/CFS/anl.{}.cfsr.{:%Y%m%d%H}.grb2'.format(workdir, var, idate)
+            if os.path.isfile(localfile):
+                if verbose: print('File already exists:\n{}'.format(localfile))
+                continue
+            try:
+                # Download the forecast
+                if verbose: print('Downloading {}...'.format(url))
+                urlretrieve(url, localfile)
+            except:
+                if verbose: print('{} not found'.format(var))
+    end = time.time()
+    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    
+    # if we only want the reanalyses, then we're done!
+    if anlonly: return
+    
+    #==== Now download the reforecasts ========================================
+    print('\n==== Downloading CFSv2 reforecasts ====')
+    nomads = 'https://nomads.ncdc.noaa.gov/data/cfsr-rfl-ts9'
+    start = time.time()
+    for var in cfs_vars:
+        # Download the forecast of each desired variable
+        url = '{}/{}/{:%Y%m}/{}.{:%Y%m%d%H}.time.grb2'.format(nomads, var, idate, var, idate)
+        localfile = '{}/CFS/fcst.{}.cfsv2.{:%Y%m%d%H}.grb2'.format(workdir, var, idate)
+        if os.path.isfile(localfile):
+            if verbose: print('File already exists:\n{}'.format(localfile))
+            continue
+        try:
+            # Download the forecast
+            if verbose: print('Downloading {}...'.format(url))
+            urlretrieve(url, localfile)
+        except:
+            if verbose: print('{} not found'.format(var))
+    end = time.time()
+    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    return
+
+####################################################################################################
+
+def download_cfs_oper(idate, fdate, workdir, verbose=False, anlonly=False):
+    """
+    Downloads operational CFSv2 forecasts (initalized on idate) and 
+    corresponding analyses (from idate to fdate)
+    
+    """
+    from urllib.request import urlretrieve
+    import time
+    
+    if not os.path.isdir('{}/CFS'.format(workdir)):
+        os.system('mkdir {}/CFS'.format(workdir))
+    
+    #==== First download the reanalyses ========================================
+    print('\n==== Downloading operational CFS analyses ====')
+    nomads = 'https://nomads.ncdc.noaa.gov/modeldata/cfsv2_analysis_timeseries'
+    start = time.time()
+    
+    # create a list of tuples specifying the years and months encompassed
+    # in the desired date range
+    dts = list(set([(dt.year, dt.month) for dt in [idate+timedelta(days=d) for d in \
+                                                   range((fdate-idate).days + 1)]]))
+    for y,m in dts:
+        for var in cfs_vars:
+            # Download the forecast of each desired variable
+            yyyy = '{:04d}'.format(y)
+            yyyymm = '{}{:02d}'.format(yyyy, m)
+            url = '{}/{}/{}/{}.gdas.{}.grb2'.format(nomads, yyyy, yyyymm, var, yyyymm)
+            localfile = '{}/CFS/anl.{}.cfs.{:%Y%m%d%H}.grb2'.format(workdir, var, idate)
+            if os.path.isfile(localfile):
+                if verbose: print('File already exists:\n{}'.format(localfile))
+                continue
+            try:
+                # Download the forecast
+                if verbose: print('Downloading {}...'.format(url))
+                urlretrieve(url, localfile)
+            except:
+                if verbose: print('{} not found'.format(var))
+    end = time.time()
+    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    
+    # if we only want the reanalyses, then we're done!
+    if anlonly: return
+    
+    #==== Now download the reforecasts ========================================
+    print('\n==== Downloading CFSv2 reforecasts ====')
+    nomads = 'https://nomads.ncdc.noaa.gov/modeldata/cfsv2_forecast_ts_9mon'
+    start = time.time()
+    for var in cfs_vars:
+        # Download the forecast of each desired variable
+        # /2011/201112/20111201/2011120100/chi200.01.2011120100.daily.grb2
+        url = '{}/{:%Y}/{:%Y%m}/{:%Y%m%d}/{:%Y%m%d%H}/{}.01.{:%Y%m%d%H}.daily.grb2'
+        url = url.format(nomads, idate, idate, idate, idate, var, idate)
+        localfile = '{}/CFS/fcst.{}.cfsv2.{:%Y%m%d%H}.grb2'.format(workdir, var, idate)
+        if os.path.isfile(localfile):
+            if verbose: print('File already exists:\n{}'.format(localfile))
+            continue
+        try:
+            # Download the forecast
+            if verbose: print('Downloading {}...'.format(url))
+            urlretrieve(url, localfile)
+        except:
+            if verbose: print('{} not found'.format(var))
+    end = time.time()
+    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    return
+
+#############################################################################################################
 ### SECTION FOR HANDLING GFS GLOBAL ANALYSES ################################################################
 #############################################################################################################
 
@@ -23,6 +279,9 @@ def download_gfsanl(idate, fdate, workdir, verbose=False):
     from [idate] through [fdate] to the location [dpath].
     """
     ftpanldir = 'GFS/analysis_only'
+    if not os.path.isdir('{}/GFS_ANL'.format(workdir)):
+        os.system('mkdir {}/GFS_ANL'.format(workdir))
+        
     # create a list of tuples specifying the yr, mon, and day of each day in the forecast
     dts = [(dt.year, dt.month, dt.day) for dt in [idate+timedelta(days=d) for d in \
                                                   range((fdate-idate).days + 1)]]
@@ -62,49 +321,6 @@ def download_gfsanl(idate, fdate, workdir, verbose=False):
                 ftp.retrbinary("RETR " + file, lf.write)
                 lf.close()
     ftp.close()
-    return
-
-####################################################################################################
-
-def convert_gfs_grb2nc(workdir, nctable='gfs_verification.table', outfile='gfs_analyses.nc'):
-    """
-    Converts downloaded GFS gribs to one netcdf file, retaining only the variables
-    designated in gfs_verification.table
-    
-    Requires the wgrib2 utility.
-    """
-    from subprocess import check_output, Popen
-    
-    # Check if the netcdf already exists
-    ncoutfile = '{}/GFS_ANL/{}'.format(workdir, outfile)
-    if os.path.isfile(ncoutfile):
-        print('GFS netCDF file already exists!')
-        return
-    print('Converting GFS gribs to netcdf')
-    
-    # Point to the nc_table
-    tablefile = '{}/GFS_ANL/{}'.format(workdir, nctable)
-    assert os.path.isfile(tablefile)
-    
-    # List the gribs to be converted
-    gfsgrbs = check_output(['ls -1a {}/GFS_ANL/gfsanl*.grb2'.format(workdir)], shell=True).split()
-    gfsgrbs = [g.decode("utf-8") for g in gfsgrbs]
-    
-    # Get the -append keyword (variable info) from the nctable comments (line 15)
-    with open(tablefile) as infile:
-        for i, line in enumerate(infile):
-            if i==14: matchtag=line[1:].rstrip(); break
-                
-    # Convert the gribs and append them to the same netcdf output file
-    for g, grbfile in enumerate(gfsgrbs):
-        print('converting grib {} of {}...'.format(g+1, len(gfsgrbs)))
-        if g==0:
-            wgribcommand = 'wgrib2 {} {} -nc_table {} -netcdf {}'.format(grbfile, matchtag,
-                                                                 tablefile, ncoutfile)
-        else:
-            wgribcommand = 'wgrib2 {} {} -append -nc_table {} -netcdf {}'.format(grbfile, 
-                                                       matchtag, tablefile, ncoutfile)
-        Popen([wgribcommand], shell=True).wait()
     return
 
 #############################################################################################################
