@@ -102,7 +102,7 @@ class MPASprocessed(xarray.Dataset):
 
     @classmethod
     def from_GFS_netcdf(cls, workdir, idate, fdate, ncfile='gfs_analyses.nc',
-                        chunks={'time': 10}):
+                        nctable='gfs.table', chunks={'time': 10}):
         """
         Initializes a new MPASprocessed object when given
         a 3-hourly GFS analysis file (netcdf)
@@ -118,7 +118,7 @@ class MPASprocessed(xarray.Dataset):
             # If not, download the gribs via ftp and convert them to netcdf
             print('File {} not found!'.format(infile))
             verf.download_gfsanl(idate, fdate, workdir)
-            verf.convert_gfs_grb2nc(workdir, outfile=ncfile)
+            verf.convert_grb2nc('{}/GFS_ANL'.format(workdir), nctable=nctable, outfile=ncfile)
         # Load the netcdf as an xarray Dataset
         analyses = xarray.open_dataset(infile, chunks=chunks)
         analyses.__class__ = cls
@@ -633,7 +633,7 @@ class MPASraw(xarray.Dataset):
 
 def timedelta_hours(dt_i, dt_f):
     """ Find the number of hours between two dates """
-    return (dt_f-dt_i).days*24 + (dt_f-dt_i).seconds/3600
+    return int((dt_f-dt_i).days*24 + (dt_f-dt_i).seconds/3600)
 
 def nearest_ind(array, value):
     return int((np.abs(array-value)).argmin())
