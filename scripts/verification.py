@@ -18,7 +18,7 @@ from color_maker.color_maker import color_map
 #############################################################################################################
 
 def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None,
-                   isanalysis=True, interp=True):
+                   isanalysis=True, interp=True, gribtag=None):
     """
     Converts downloaded NCEP gribs (forecasts or analyses) to netcdf, 
     retaining only the dates, forecast types, and variables designated 
@@ -42,10 +42,11 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
     assert os.path.isfile(tablefile)
     
     # List the gribs to be converted
-    if isanalysis:
-        grbfiles = check_output(['ls -1a {}/anl*.grb2'.format(ncdir)], shell=True).split()
-    else:
-        grbfiles = check_output(['ls -1a {}/fcst*.grb2'.format(ncdir)], shell=True).split()
+    if isanalysis and gribtag is None:
+        gribtag = 'anl'
+    elif gribtag is None:
+        gribtag = 'fcst'
+    grbfiles = check_output(['ls -1a {}/{}*.grb2'.format(ncdir, gribtag)], shell=True).split()
     grbfiles = [g.decode("utf-8") for g in grbfiles]
     
     # Use the -match keyword to select the desired dates
@@ -276,6 +277,59 @@ def download_cfs_climo(climdir, verbose=False):
             urlretrieve(url, localfile)
         except:
             if verbose: print('{} not found'.format(var))
+    end = time.time()
+    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    return
+
+####################################################################################################
+
+def cfs_clim_grb2nc(ncdir, nctable='cfs.table'):
+    """
+    Converts downloaded CFSR calibration climatology gribs to netcdf; 
+    the gribs are all interpolated to a 0.5-degree lat-lon grid
+    before conversion to netCDF (to ensure compatibility for combination)
+    
+    Requires the wgrib2 utility.
+    """
+    from subprocess import Popen
+    import time
+        
+    # Point to the nc_table
+    tablefile = '{}/{}'.format(ncdir, nctable)
+    assert os.path.isfile(tablefile)
+    
+    # Use the -match keyword to select the desired dates
+    with open(tablefile, "r") as tfile:
+        for l, line in enumerate(tfile):
+            if l==14:
+                matchtag = line[1:].rstrip()
+                break                   
+                
+    # Interpolate each grib file to a 0.5-deg lat-lon grid and then convert/append
+    # to one netcdf file
+    start = time.time()
+    for v, var in enumerate(cfs_vars):
+        print('processing grib {} of {}...'.format(v+1, len(cfs_vars)))
+        grbfile = '{}/{}.clim.grb2'.format(ncdir, var)
+        print(grbfile)
+        # Check if this field has already been converted
+        ncoutfile = '{}/clim.{}.nc'.format(ncdir, var)
+        if os.path.isfile(ncoutfile):
+            print('clim.{}.nc already exists!'.format(var))
+            continue
+        print('  interpolating...')
+        interpcomm = 'wgrib2 {} {} -new_grid latlon 0:720:0.5 -90:361:0.5 temp.grb2'
+        interpcomm = interpcomm.format(grbfile, matchtag)
+        Popen([interpcomm], shell=True).wait()
+        convertcomm = 'wgrib2 temp.grb2 -nc_table {} -netcdf {}'
+        convertcomm = convertcomm.format(tablefile, ncoutfile)
+        print('  converting to netcdf...')
+        if os.path.isfile(ncoutfile):
+            # append to the file after the first iteration
+            splits = convertcomm.split('-nc_table')
+            convertcomm = splits[0] + '-append -nc_table' + splits[1]
+        Popen([convertcomm], shell=True).wait()
+        Popen(['rm -f temp.grb2'], shell=True).wait()
     end = time.time()
     print('Elapsed time: {:.2f} min'.format((end-start)/60.))
     return
