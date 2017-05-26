@@ -14,11 +14,13 @@ import os
 class MPASprocessed(xarray.Dataset):
     """
     Define a multivariate Dataset composed of MPAS forecast output.
-    
-    Below are a handful of different class methods to initialize an MPASprocessed
-    object from different datasets
     """
-        
+      
+    # THE FOLLOWING ARE SEVERAL CLASS METHODS USED TO INITIALIZE AN MPASprocessed
+    # OBJECT FROM DIFFERENT DATASETS. THE IDEA IS TO HAVE ALL GRIDS (MPAS FORECASTS,
+    # ANALYSIS GRIDS, OTHER MODEL FORECASTS, SATELLITE OBSERVATIONS, ETC.) STORED
+    # IN THE SAME OBJECT TYPE FOR SLICK AND EASY MANIPULATION/COMPARISON
+    
     @classmethod
     def from_netcdf(cls, ncfile, idate, dt, chunks={'Time': 10}):
         """
@@ -110,7 +112,6 @@ class MPASprocessed(xarray.Dataset):
         workdir -----> string path to the input/output
         ncfile ------> netcdf of GFS analyses to be loaded via xarray
         """
-        import os
         import verification as verf
         infile = '{}/GFS_ANL/{}'.format(workdir, ncfile)
         # Has the netcdf file already been created?
@@ -224,7 +225,7 @@ class MPASprocessed(xarray.Dataset):
     
     @classmethod
     def from_CFSRR_netcdfs(cls, workdir, idate, fdate, nctable='cfs.table', 
-                           chunks={'time': 10}):
+                           anlonly=False, chunks={'time': 10}):
         """
         Initializes two new MPASprocessed objects (analyses and forecasts) when pointed
         to the 6-hourly CFSR/CFSv2 netcdfs
@@ -232,7 +233,6 @@ class MPASprocessed(xarray.Dataset):
         workdir -----> string path to the input/output
         ncfile ------> netcdf of GFS analyses to be loaded via xarray
         """
-        import os
         import verification as verf
         cfsdir = '{}/CFS'.format(workdir)
         anlfile = 'cfsr_{:%Y%m%d%H}-{:%Y%m%d%H}.nc'.format(idate, fdate)
@@ -245,13 +245,14 @@ class MPASprocessed(xarray.Dataset):
             print('File(s) {} and/or {} not found in working directory!'.format(anlfile, fcstfile))
             # If the netcdfs don't exist, then download and convert the gribs
             if idate.year >= 2012:
-                verf.download_cfs_oper(idate, fdate, cfsdir, verbose=False)
+                verf.download_cfs_oper(idate, fdate, cfsdir, anlonly=anlonly)
             else:
-                verf.download_cfsrr(idate, fdate, cfsdir, verbose=False)
+                verf.download_cfsrr(idate, fdate, cfsdir, anlonly=anlonly)
             print('\n==== Converting CFSR to netcdf ====')
             verf.convert_grb2nc(cfsdir, outfile=anlfile, daterange=(idate,fdate), isanalysis=True)
-            print('\n==== Converting CFSv2 to netcdf ====')
-            verf.convert_grb2nc(cfsdir, outfile=fcstfile, daterange=(idate,fdate), isanalysis=False)
+            if not anlonly:
+                print('\n==== Converting CFSv2 to netcdf ====')
+                verf.convert_grb2nc(cfsdir, outfile=fcstfile, daterange=(idate,fdate), isanalysis=False)
 
         # OK, we have the data downloaded, interpolated to 0.5deg latlon,
         # and converted to two netcdfs (analyses and forecast)
@@ -259,28 +260,92 @@ class MPASprocessed(xarray.Dataset):
         # analyses to the forecasts (because NCEP doesn't include the analyses in 
         # the forecast gribs.... grr. )
         print('Loading CFSR/CFSv2 from netcdfs...')
+        # Process the analyses first
         analyses = xarray.open_dataset(anlpath, chunks=chunks)
-        forecast = xarray.open_dataset(fcstpath, chunks=chunks)
         # Rename the dimensions
         analyses.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
-        forecast.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
         # Trim the last time off of the anlyses (precip)
         analyses = analyses.isel(Time=range(analyses.dims['Time']-1))
-        # Prepend the t=0 analysis to the forecast (the initialization)
-        forecast = xarray.concat([analyses.isel(Time=0), forecast], dim='Time')
-        # Change the class to MPASprocessed
-        analyses.__class__ = cls
-        forecast.__class__ = cls
+        datasets = [analyses]
+        
+        # Now process the forecast
+        if not anlonly:
+            forecast = xarray.open_dataset(fcstpath, chunks=chunks)
+            forecast.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
+            # Prepend the t=0 analysis to the forecast (the initialization)
+            forecast = xarray.concat([analyses.isel(Time=0), forecast], dim='Time')
+            datasets.append(forecast)
+ 
         # Need to store date info, because it is not stored in the MPAS netcdf
         # metadata by default
         for dataset in [analyses, forecast]:
+            dataset.__class__ = cls # Change the class to MPASprocessed
             dataset['idate'] = idate  # initialization date
             dataset['dt'] = 6        # output frequency (hours)
             dataset['type'] = 'CFS'
             # Add 'lat' and 'lon' variables so functions below still work
             dataset.update(dataset.assign(lat=analyses.variables['nLats']))
             dataset.update(dataset.assign(lon=analyses.variables['nLons']))
-        return analyses, forecast
+        if anlonly: return analyses
+        else:       return analyses, forecast
+        
+    @classmethod
+    def from_CFSclimo_netcdfs(cls, climdir, idate, fdate, nctable='cfs.table', 
+                              chunks={'time': 10}):
+        """
+        Initializes two new MPASprocessed objects (analyses and forecasts) when pointed
+        to the 6-hourly CFSR/CFSv2 netcdfs
+
+        workdir -----> string path to the input/output
+        ncfile ------> netcdf of GFS analyses to be loaded via xarray
+        """
+        import verification as verf
+        from subprocess import check_output
+
+        climfiles = '{}/clim.*.nc'.format(climdir)
+
+        # Have the forecast/analysis netcdf files already been created?
+        try:
+            filelist = check_output(['ls -1a {}'.format(climfiles)], shell=True).split()
+        except:
+            print('No netcdfs found in {}!'.format(climdir))
+            # If the netcdfs don't exist, then download and convert the gribs
+            verf.download_cfs_climo(climdir)
+            verf.cfs_clim_grb2nc(climdir)
+
+        # OK, we have the data downloaded, interpolated to 0.5deg latlon,
+        # and converted to netcdfs (one per variable)
+        # Now we just need to load them in one xarray and select the desired dates
+        print('Loading CFSR climatology from netcdfs...')
+        climo = xarray.open_mfdataset(climfiles, chunks=chunks)
+        # Now let's only select the dates we want
+        climdates = [datetime.utcfromtimestamp(dt.tolist()/1e9) for dt in climo['time'].values]
+        des_dates = [(idate + timedelta(hours=6*x)).replace(year=1984) for x in \
+                     range(int(timedelta_hours(idate,fdate)/6) + 1)]
+        des_inds = np.where([clim_dt in des_dates for clim_dt in climdates])[0]
+        # Select ONLY these dates!
+        print('  selecting only desired dates...')
+        climo = climo.isel(time=des_inds)
+        # If our date range spans a new year, roll the data accordingly
+        if fdate.year - idate.year == 1:
+            # How many dates are in the new year?
+            des_dates = [idate + timedelta(hours=6*x) for x in \
+                         range(int(timedelta_hours(idate,fdate)/6) + 1)]
+            nroll = len(np.where([dt.year==fdate.year for dt in des_dates])[0])
+            climo = climo.roll(time=-nroll)
+
+        # Rename the dimensions
+        climo.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
+
+        # Store metadata
+        climo.__class__ = cls # Change the class to MPASprocessed
+        climo['idate'] = idate  # initialization date
+        climo['dt'] = 6        # output frequency (hours)
+        climo['type'] = 'CFS'
+        # Add 'lat' and 'lon' variables so functions below still work
+        climo.update(climo.assign(lat=climo.variables['nLats']))
+        climo.update(climo.assign(lon=climo.variables['nLons']))
+        return climo
     
     # For adding the "idate," "dt," and "type" attributes
     def __setitem__(self, key, value):
