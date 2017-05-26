@@ -222,7 +222,67 @@ class MPASprocessed(xarray.Dataset):
         gpm['type'] = 'GPM'
         return gpm
     
-    # For adding the "idate" and "dt" items above
+    @classmethod
+    def from_CFSRR_netcdfs(cls, workdir, idate, fdate, nctable='cfs.table', 
+                           chunks={'time': 10}):
+        """
+        Initializes two new MPASprocessed objects (analyses and forecasts) when pointed
+        to the 6-hourly CFSR/CFSv2 netcdfs
+
+        workdir -----> string path to the input/output
+        ncfile ------> netcdf of GFS analyses to be loaded via xarray
+        """
+        import os
+        import verification as verf
+        cfsdir = '{}/CFS'.format(workdir)
+        anlfile = 'cfsr_{:%Y%m%d%H}-{:%Y%m%d%H}.nc'.format(idate, fdate)
+        fcstfile = 'cfsv2_{:%Y%m%d%H}-{:%Y%m%d%H}.nc'.format(idate, fdate)
+        anlpath = '{}/{}'.format(cfsdir, anlfile)
+        fcstpath = '{}/{}'.format(cfsdir, fcstfile)
+
+        # Have the forecast/analysis netcdf files already been created?
+        if not os.path.isfile(anlpath) or not os.path.isfile(fcstpath):
+            print('File(s) {} and/or {} not found in working directory!'.format(anlfile, fcstfile))
+            # If the netcdfs don't exist, then download and convert the gribs
+            if idate.year >= 2012:
+                verf.download_cfs_oper(idate, fdate, cfsdir, verbose=False)
+            else:
+                verf.download_cfsrr(idate, fdate, cfsdir, verbose=False)
+            print('\n==== Converting CFSR to netcdf ====')
+            verf.convert_grb2nc(cfsdir, outfile=anlfile, daterange=(idate,fdate), isanalysis=True)
+            print('\n==== Converting CFSv2 to netcdf ====')
+            verf.convert_grb2nc(cfsdir, outfile=fcstfile, daterange=(idate,fdate), isanalysis=False)
+
+        # OK, we have the data downloaded, interpolated to 0.5deg latlon,
+        # and converted to two netcdfs (analyses and forecast)
+        # Now we just need to load them as xarrays and prepend t=0 from the 
+        # analyses to the forecasts (because NCEP doesn't include the analyses in 
+        # the forecast gribs.... grr. )
+        print('Loading CFSR/CFSv2 from netcdfs...')
+        analyses = xarray.open_dataset(anlpath, chunks=chunks)
+        forecast = xarray.open_dataset(fcstpath, chunks=chunks)
+        # Rename the dimensions
+        analyses.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
+        forecast.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
+        # Trim the last time off of the anlyses (precip)
+        analyses = analyses.isel(Time=range(analyses.dims['Time']-1))
+        # Prepend the t=0 analysis to the forecast (the initialization)
+        forecast = xarray.concat([analyses.isel(Time=0), forecast], dim='Time')
+        # Change the class to MPASprocessed
+        analyses.__class__ = cls
+        forecast.__class__ = cls
+        # Need to store date info, because it is not stored in the MPAS netcdf
+        # metadata by default
+        for dataset in [analyses, forecast]:
+            dataset['idate'] = idate  # initialization date
+            dataset['dt'] = 6        # output frequency (hours)
+            dataset['type'] = 'CFS'
+            # Add 'lat' and 'lon' variables so functions below still work
+            dataset.update(dataset.assign(lat=analyses.variables['nLats']))
+            dataset.update(dataset.assign(lon=analyses.variables['nLons']))
+        return analyses, forecast
+    
+    # For adding the "idate," "dt," and "type" attributes
     def __setitem__(self, key, value):
         self.__dict__[key] = value
 
