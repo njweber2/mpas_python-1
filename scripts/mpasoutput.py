@@ -367,7 +367,7 @@ class MPASprocessed(xarray.Dataset):
     def leadtimes(self):
         return [timedelta_hours(self.idate, d) for d in self.vdates()]
         
-#==== Get the lat/lon grid ====================================================
+#==== Get the lat/lon grid and area weights ==================================
     def latlons(self):
         """ Returns 1D lat and lon grids """
         return self['lat'].values, self['lon'].values
@@ -381,7 +381,7 @@ class MPASprocessed(xarray.Dataset):
             raise ValueError('"{}" not in list of valid variables'.format(vrbl))
         return self.data_vars[vrbl]
     
-#==== Compute the total precipitation rate from rainc + rainnc ============
+#==== Compute the total precipitation rate from rainc + rainnc ================
     def compute_preciprate(self, dt=3):
         assert dt % self.dt == 0
         assert self.type == 'MPAS'
@@ -471,14 +471,33 @@ class MPASprocessed(xarray.Dataset):
         subset = self.isel(nLats=range(yi,yf))[field] * self.area_weights()[yi:yf]
         return subset.mean(dim='nLats', keep_attrs=True)
         
-#==== Average a field between two times =====================================
-    def compute_timemean(self, field, dt_i=None, dt_f=None):
+#==== Average all fields or a single field between two times ==================
+    def compute_timemean(self, field=None, dt_i=None, dt_f=None):
         if dt_i is None or dt_f is None:
-            return self[field].mean(dim='Time', keep_attrs=True)
+            if field is None:  return self.mean(dim='Time', keep_attrs=True)
+            else:              return self[field].mean(dim='Time', keep_attrs=True)
         else:
-            ti = nearest_ind(self.vdates, dt_i)
-            tf = nearest_ind(self.vdates, dt_f) + 1
-            return self.isel(Time=range(ti,tf))[field].mean(dim='Time', keep_attrs=True)
+            ti = nearest_ind(self.vdates(), dt_i)
+            tf = nearest_ind(self.vdates(), dt_f) + 1
+            if field is None:  return self.isel(Time=range(ti,tf)).mean(dim='Time', keep_attrs=True)
+            else:              return self.isel(Time=range(ti,tf))[field].mean(dim='Time', keep_attrs=True)
+        
+#==== Average the data to a coarser timescale (e.g., daily, weekly) ===========
+    def temporal_average(self, timescale):
+        """ [timescale] should be in hours """
+        assert timescale % self.dt == 0
+        indiv_times = []
+        vdates = self.vdates()
+        ntsteps = int(timescale/self.dt)
+        for t in np.arange(0, self.ntimes()-1, ntsteps):
+            avg_1time = self.compute_timemean(dt_i=vdates[t], dt_f=vdates[t+ntsteps]-timedelta(hours=self.dt))
+            indiv_times.append(avg_1time)
+        avgd_data = xarray.concat(indiv_times, dim='Time')
+        avgd_data.__class__ = self.__class__
+        avgd_data.__setitem__('dt', timescale)
+        avgd_data.__setitem__('idate', self.idate)
+        avgd_data.__setitem__('type', self.type)
+        return avgd_data
         
 #==== Fetch the data from a subset of the grid ===============================
     def subset(self, field, ll=(-90, -80), ur=(90, 360), aw=False):
