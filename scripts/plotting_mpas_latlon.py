@@ -32,6 +32,19 @@ def truncate_colormap(cmap, minval=0.0, maxval=1.0, n=100):
         cmap(np.linspace(minval, maxval, n)))
     return new_cmap
     
+def discrete_cmap(N, base_cmap=None):
+    """Create an N-bin discrete colormap from the specified input map"""
+
+    # Note that if base_cmap is a string or None, you can simply do
+    #    return plt.cm.get_cmap(base_cmap, N)
+    # The following works for string, None, or a colormap instance:
+    try:
+        base = color_map(base_cmap)
+    except:
+        base = plt.cm.get_cmap(base_cmap)
+    color_list = base(np.linspace(0, 1, N))
+    cmap_name = base.name + str(N)
+    return base.from_list(cmap_name, color_list, N)
 
 #############################################################################################################
 
@@ -118,13 +131,14 @@ def simple_contourf(m, ax, cax, x, y, field, levs=None, cmap=color_map('ncar_tem
     if cbar: plt.colorbar(csf, cax=cax)
     # Set titles
     returns = [csf]
-    if idate is not None and vdate is not None and units is not None:
+    if units is not None:
         maintitle = '{} [{}]'.format(varname, units)
-        ax.text(0.0, 1.015, maintitle, transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
+        ax.text(0.0, 1.015, maintitle, transform=ax.transAxes, ha='left', va='bottom', fontsize=12)
+    if idate is not None and vdate is not None:
         txt = ax.text(1.0, 1.01, 'valid: {:%Y-%m-%d %H:00}'.format(vdate), transform=ax.transAxes,
-                ha='right', va='bottom', fontsize=12)
-        ax.text(1.0, 1.045, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
-                ha='right', va='bottom', fontsize=12)
+                ha='right', va='bottom', fontsize=10)
+        ax.text(1.0, 1.05, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=10)
         returns.append(txt)
     return returns    
     #############################################################################################################
@@ -359,30 +373,41 @@ def plot_brightness_temp(m, ax, cax, fcst_xry, blevs=np.arange(-80, 41, 4),
 
 #############################################################################################################
 
-def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, 
-                   levs=[.005,.01,.02,.05,.1,.25,.5,0.75, 1.,1.5,2.,3.],
-                   cmap=color_map('ncar_precip'), idate=None, units=None, cbar=True):
+def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, xlims=None, climo=None, roll=0,
+                   levs=[.25, 1., 2.5, 5., 10., 15., 20., 30., 40., 50., 75., 100., 125., 150.],
+                   cmap=color_map('ncar_precip'), idate=None, units=None, cbar=True, ext='both'):
     import matplotlib.dates as mdates
     
+    if roll != 0: assert xlims is None
     fcst = deepcopy(fcst_xry)
     fcst.restructure_lons()
     # average the field from lat_i to lat_f
     hov = fcst.hovmoller(field, lat_i=slat, lat_f=nlat)
-    if 'prate' in field: 
-        hov *= 0.0393701 # mm to inches
+    if climo is not None:
+        hov -= climo.hovmoller(field, lat_i=slat, lat_f=nlat)
+    if 'prate' in field and (np.array(levs)>=0).all(): 
         cmap = nlcmap(cmap, levs)
+        ext = 'neither'
         
     # plot the hovmoller, with time increasing downwards
     x = fcst['lon'].values
     y = fcst_xry.vdates()[::-1]
-    cs = ax.contourf(x, y, hov.values[::-1, :], levels=levs, cmap=cmap)
-    if cbar: plt.colorbar(cs, cax=cax)
-
+    hov4plot = np.roll(hov.values[::-1, :], roll, axis=1)
+    cs = ax.contourf(x, y, hov4plot, cmap=cmap, levels=levs, extend=ext)
+    if cbar: 
+        cb = plt.colorbar(cs, cax=cax)
+        cb.set_ticks(levs)
+        cb.set_ticklabels(levs)
+        
     # make the plot look nice
-    ax.set_xlim(x[0], x[-1])
-    ax.set_ylim(y[0], y[-1])
-    xticks = range(0, 361, 60)
-    ax.set_xticks(xticks)
+    xticks = np.arange(0, 361, 60)
+    if roll != 0:
+        xticklocs = xticks + roll*fcst_xry.dx()
+        xticklocs[xticklocs < 0] += 360
+        xticklocs[xticklocs > 360] -= 360
+    else:
+        xticklocs = xticks
+    ax.set_xticks(xticklocs)
     xlabs = np.array(['{:3d}W'.format(360-l) if l>=180 else '{:3d}E'.format(l) for l in xticks])
     xx = [i for i,xl in enumerate(xlabs) if xl.strip() in ['180E', '180W']]
     xlabs[xx] = '180'
@@ -394,12 +419,18 @@ def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat,
     ax.yaxis.set_major_locator(days)
     ax.yaxis.set_major_formatter(datesFmt)
     ax.grid(color='k', alpha=0.5, linestyle='dashed', linewidth=0.5)
+    if xlims is None:
+        ax.set_xlim(x[0], x[-1])
+    else:
+        ax.set_xlim(xlims[0], xlims[1])
+    ax.set_ylim(y[0], y[-1])
     
     # Set titles
-    if idate is not None and units is not None:
+    if units is not None:
         maintitle = '{} [{}] averaged from {}$^\circ$ to {}$^\circ$'
         ax.text(0.0, 1.015, maintitle.format(field, units, int(slat), int(nlat)), 
                 transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
+    if idate is not None:
         ax.text(1.0, 1.015, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
                 ha='right', va='bottom', fontsize=12)
-    return cs
+    return cs, hov4plot
