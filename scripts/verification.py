@@ -17,8 +17,19 @@ from color_maker.color_maker import color_map
 ### GENERAL TOOLS ###########################################################################################
 #############################################################################################################
 
+def remove_duplicates(values):
+    output = []
+    seen = set()
+    for value in values:
+        # If value has not been encountered yet,
+        # ... add it to both list and set.
+        if value not in seen:
+            output.append(value)
+            seen.add(value)
+    return output
+
 def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None,
-                   isanalysis=True, interp=True, gribtag=None):
+                   isanalysis=True, interp=True, gribtag=None, vrbls=None):
     """
     Converts downloaded NCEP gribs (forecasts or analyses) to netcdf, 
     retaining only the dates, forecast types, and variables designated 
@@ -46,8 +57,32 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
         gribtag = 'anl'
     elif gribtag is None:
         gribtag = 'fcst'
-    grbfiles = check_output(['ls -1a {}/{}*.grb2'.format(ncdir, gribtag)], shell=True).split()
-    grbfiles = [g.decode("utf-8") for g in grbfiles]
+    # If we're processing monthly analysis files, we need to make sure we load the dates in order
+    if isanalysis and 'cfs' in nctable and daterange is not None:
+        grbfiles = []
+        mons = remove_duplicates([dt.month for dt in [daterange[0]+timedelta(days=d) for d in \
+                                  range((daterange[1]-daterange[0]).days + 1)]])
+        for m in mons:
+            files = check_output(['ls -1a {}/{}*{:02d}.grb2'.format(ncdir, gribtag, m)], shell=True).split()
+            grbfiles += [g.decode("utf-8") for g in files]
+    else:
+        grbfiles = check_output(['ls -1a {}/{}*.grb2'.format(ncdir, gribtag)], shell=True).split()
+        grbfiles = [g.decode("utf-8") for g in grbfiles]
+        
+    # Only convert the desired variables
+    if vrbls is not None:
+        grbfiles = [grb for grb in grbfiles if any([vrbl in grb for vrbl in vrbls])]
+        
+    # Our first grib file *must* be for a variable that is not temporally averaged (like precip/OLR)
+    if any([vrbl in grbfiles[0] for vrbl in ['prate', 'ulwtoa']]):
+        # Find the first grb with any other variable
+        i = 0
+        for g, grbfile in enumerate(grbfiles):
+            if not any([vrbl in grbfile for vrbl in ['prate', 'ulwtoa']]):
+                i = g
+                break
+        # Swap the first file with the non-OLR/prate file
+        grbfiles[0], grbfiles[i] = grbfiles[i], grbfiles[0]
     
     # Use the -match keyword to select the desired dates
     with open(tablefile, "r") as tfile:
@@ -91,7 +126,7 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
         print(grbfile)
         if interp:
             print('  interpolating...')
-            interpcomm = 'wgrib2 {} {} -new_grid latlon 0:720:0.5 -90:361:0.5 temp.grb2'
+            interpcomm = 'wgrib2 {} {} -new_grid_vectors U:V -new_grid latlon 0:720:0.5 -90:361:0.5 temp.grb2'
             interpcomm = interpcomm.format(grbfile, matchtag)
             Popen([interpcomm], shell=True).wait()
             convertcomm = 'wgrib2 temp.grb2 -nc_table {} -netcdf {}'
@@ -115,7 +150,7 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
 cfs_vars = ['chi200', 'prate', 'pressfc', 'psi200', 'pwat', 'tmp2m',
             'tmpsfc', 'ulwtoa', 'wnd200', 'wnd850', 'z500', 'z200']
 
-def download_cfsrr(idate, fdate, cfsdir, verbose=False, anlonly=False):
+def download_cfsrr(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=False):
     """
     Downloads CFSv2 reforecasts (initalized on idate) and 
     corresponding analyses (CFSR; from idate to fdate)
@@ -136,12 +171,15 @@ def download_cfsrr(idate, fdate, cfsdir, verbose=False, anlonly=False):
     # in the desired date range
     dts = list(set([(dt.year, dt.month) for dt in [idate+timedelta(days=d) for d in \
                                                    range((fdate-idate).days + 1)]]))
+    if vrbls is None:
+        vrbls = cfs_vars
+
     for y,m in dts:
-        for var in cfs_vars:
+        for var in vrbls:
             # Download the forecast of each desired variable
             yyyymm = '{:04d}{:02d}'.format(y, m)
             url = '{}/{}/{}.gdas.{}.grb2'.format(nomads, yyyymm, var, yyyymm)
-            localfile = '{}/anl.{}.cfs.{:02d}.grb2'.format(cfsdir, var, m)
+            localfile = '{}/anl.{}.cfs.{}.grb2'.format(cfsdir, var, yyyymm)
             if os.path.isfile(localfile):
                 if verbose: print('File already exists:\n{}'.format(localfile))
                 continue
@@ -161,7 +199,7 @@ def download_cfsrr(idate, fdate, cfsdir, verbose=False, anlonly=False):
     print('\n==== Downloading CFSv2 reforecasts ====')
     nomads = 'https://nomads.ncdc.noaa.gov/data/cfsr-rfl-ts9'
     start = time.time()
-    for var in cfs_vars:
+    for var in vrbls:
         # Download the forecast of each desired variable
         url = '{}/{}/{:%Y%m}/{}.{:%Y%m%d%H}.time.grb2'.format(nomads, var, idate, var, idate)
         localfile = '{}/fcst.{}.cfsv2.{:%Y%m%d%H}.grb2'.format(cfsdir, var, idate)
@@ -180,7 +218,7 @@ def download_cfsrr(idate, fdate, cfsdir, verbose=False, anlonly=False):
 
 ####################################################################################################
 
-def download_cfs_oper(idate, fdate, cfsdir, verbose=False, anlonly=False):
+def download_cfs_oper(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=False):
     """
     Downloads operational CFSv2 forecasts (initalized on idate) and 
     corresponding analyses (from idate to fdate)
@@ -188,9 +226,7 @@ def download_cfs_oper(idate, fdate, cfsdir, verbose=False, anlonly=False):
     """
     from urllib.request import urlretrieve
     import time
-    ###
-    verbose = True
-    ###
+
     if not os.path.isdir(cfsdir):
         os.system('mkdir {}'.format(cfsdir))
     
@@ -201,10 +237,13 @@ def download_cfs_oper(idate, fdate, cfsdir, verbose=False, anlonly=False):
     
     # create a list of tuples specifying the years and months encompassed
     # in the desired date range
-    dts = list(set([(dt.year, dt.month) for dt in [idate+timedelta(days=d) for d in \
-                                                   range((fdate-idate).days + 1)]]))
+    dts = remove_duplicates([(dt.year, dt.month) for dt in [idate+timedelta(days=d) for d in \
+                             range((fdate-idate).days + 1)]])
+    if vrbls is None:
+        vrbls = cfs_vars
+        
     for y,m in dts:
-        for var in cfs_vars:
+        for var in vrbls:
             # Download the forecast of each desired variable
             yyyy = '{:04d}'.format(y)
             yyyymm = '{}{:02d}'.format(yyyy, m)
@@ -229,7 +268,7 @@ def download_cfs_oper(idate, fdate, cfsdir, verbose=False, anlonly=False):
     print('\n==== Downloading CFSv2 reforecasts ====')
     nomads = 'https://nomads.ncdc.noaa.gov/modeldata/cfsv2_forecast_ts_9mon'
     start = time.time()
-    for var in cfs_vars:
+    for var in vrbls:
         # Download the forecast of each desired variable
         # /2011/201112/20111201/2011120100/chi200.01.2011120100.daily.grb2
         url = '{}/{:%Y}/{:%Y%m}/{:%Y%m%d}/{:%Y%m%d%H}/{}.01.{:%Y%m%d%H}.daily.grb2'
@@ -534,11 +573,11 @@ def download_trmm_3b42rt(username, idate, fdate, workdir, verbose=False):
         ftp.retrlines("NLST", files.append)
         for file in files:
             # ignore subdirectories
-            if len(file) < 25: continue
+            if file[:4] != '3B42': continue
                 
             # get datetime info for each file
-            fh = int(file[-11:-9])
-
+            fh = int(file[14:16])
+            print(fh, file)
             file_dt = datetime(y, m, d, fh)
             
             # this is where we will download the file
