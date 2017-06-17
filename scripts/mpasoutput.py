@@ -22,7 +22,7 @@ class MPASprocessed(xarray.Dataset):
     # IN THE SAME OBJECT TYPE FOR SLICK AND EASY MANIPULATION/COMPARISON
     
     @classmethod
-    def from_netcdf(cls, ncfile, idate, dt, chunks={'Time': 10}):
+    def from_netcdf(cls, ncfile, workdir, idate, dt, chunks={'Time': 10}):
         """
         Initializes a new MPASprocessed object when given
         a processed MPAS output file (netcdf)
@@ -32,12 +32,8 @@ class MPASprocessed(xarray.Dataset):
         https://github.com/mgduda/convert_mpas/
         """
         forecast = xarray.open_dataset(ncfile, chunks=chunks)
+        forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
         forecast.__class__ = cls
-        # Need to store date info, because it is not stored in the MPAS netcdf
-        # metadata by default
-        forecast['idate'] = idate  # initialization date
-        forecast['dt'] = dt        # output frequency (hours)
-        forecast['type'] = 'MPAS'
         return forecast
     
     @classmethod
@@ -94,12 +90,8 @@ class MPASprocessed(xarray.Dataset):
         
         # Finally, create our MPASprocessed object like normal
         forecast = xarray.open_dataset('{}/{}'.format(workdir, outputfile), chunks=chunks)
+        forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
         forecast.__class__ = cls
-        # Need to store date info, because it is not stored in the MPAS netcdf
-        # metadata by default
-        forecast['idate'] = idate  # initialization date
-        forecast['dt'] = dt        # output frequency (hours)
-        forecast['type'] = 'MPAS'
         return forecast
 
     @classmethod
@@ -122,12 +114,8 @@ class MPASprocessed(xarray.Dataset):
             verf.convert_grb2nc('{}/GFS_ANL'.format(workdir), nctable=nctable, outfile=ncfile)
         # Load the netcdf as an xarray Dataset
         analyses = xarray.open_dataset(infile, chunks=chunks)
+        analyses.attrs.update(idate=idate, dt=3, type='GFS', workdir=workdir)
         analyses.__class__ = cls
-        # Need to store date info, because it is not stored in the MPAS netcdf
-        # metadata by default
-        analyses['idate'] = idate  # initialization date
-        analyses['dt'] = 3        # output frequency (hours)
-        analyses['type'] = 'GFS'
         # Rename the coordinates/dims so the functions below still work
         analyses.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
         analyses.update(analyses.assign(lat=analyses.variables['nLats']))
@@ -149,12 +137,14 @@ class MPASprocessed(xarray.Dataset):
         trmmdir = '{}/TRMM_3B42RT'.format(workdir)
         
         # Is the data already downloaded?
-        if not os.path.isdir(trmmdir):
+        try:
+            trmmfiles = check_output(['ls -1a {}/*.HDF'.format(trmmdir)], shell=True).split()
+        except:
             # If not, download the hdfs via ftp
             print('TRMM directory not found!')
             verf.download_trmm_3b42rt(ftpusername, idate, fdate, workdir)
-        # list the hdf files
-        trmmfiles = check_output(['ls -1a {}/*.HDF'.format(trmmdir)], shell=True).split()
+            trmmfiles = check_output(['ls -1a {}/*.HDF'.format(trmmdir)], shell=True).split()
+        
         # load the just the precipitation variable from each file
         varlist = []
         for f, file in enumerate(trmmfiles):
@@ -171,14 +161,11 @@ class MPASprocessed(xarray.Dataset):
 
         # Create an xarray Dataset and compute 3-hourly precipitation
         trmm = xarray.Dataset({'preciprate' : precip, 'lat' : lat, 'lon' : lon})
-        prate3h = trmm['preciprate'].shift(Time=1)*3
-        trmm.update(trmm.assign(prate3h=prate3h))
+        prate1h = trmm['preciprate'].shift(Time=1)
+        prate3h = prate1h*3
+        trmm.update(trmm.assign(prate1h=prate1h, prate3h=prate3h))
+        trmm.attrs.update(idate=idate, dt=3, type='TRMM', workdir=workdir)
         trmm.__class__ = cls
-        # Need to store date info, because it is not stored in the MPAS netcdf
-        # metadata by default
-        trmm['idate'] = idate  # initialization date
-        trmm['dt'] = 3         # output frequency (hours)
-        trmm['type'] = 'TRMM'
         return trmm
 
     @classmethod
@@ -214,18 +201,13 @@ class MPASprocessed(xarray.Dataset):
         # Create an xarray Dataset with the above variables
         gpm = xarray.Dataset({'prate1h' : prate1h, 'prate3h' : prate3h,
                               'lat' : lat, 'lon' : lon})
-
+        gpm.attrs.update(idate=idate, dt=1, type='GPM', workdir=workdir)
         gpm.__class__ = cls
-        # Need to store date info, because it is not stored in the MPAS netcdf
-        # metadata by default
-        gpm['idate'] = idate  # initialization date
-        gpm['dt'] = 1         # output frequency (hours)
-        gpm['type'] = 'GPM'
         return gpm
     
     @classmethod
     def from_CFSRR_netcdfs(cls, workdir, idate, fdate, nctable='cfs.table', 
-                           anlonly=False, chunks={'time': 10}):
+                           anlonly=False, chunks={'time': 10}, vrbls=None):
         """
         Initializes two new MPASprocessed objects (analyses and forecasts) when pointed
         to the 6-hourly CFSR/CFSv2 netcdfs
@@ -244,15 +226,15 @@ class MPASprocessed(xarray.Dataset):
         if not os.path.isfile(anlpath) or not os.path.isfile(fcstpath):
             print('File(s) {} and/or {} not found in working directory!'.format(anlfile, fcstfile))
             # If the netcdfs don't exist, then download and convert the gribs
-            if idate.year >= 2012:
-                verf.download_cfs_oper(idate, fdate, cfsdir, anlonly=anlonly)
+            if idate.year >= 2011:
+                verf.download_cfs_oper(idate, fdate, cfsdir, vrbls=vrbls, anlonly=anlonly)
             else:
-                verf.download_cfsrr(idate, fdate, cfsdir, anlonly=anlonly)
+                verf.download_cfsrr(idate, fdate, cfsdir, vrbls=vrbls, anlonly=anlonly)
             print('\n==== Converting CFSR to netcdf ====')
-            verf.convert_grb2nc(cfsdir, outfile=anlfile, daterange=(idate,fdate), isanalysis=True)
+            verf.convert_grb2nc(cfsdir, outfile=anlfile, daterange=(idate,fdate), isanalysis=True, vrbls=vrbls)
             if not anlonly:
                 print('\n==== Converting CFSv2 to netcdf ====')
-                verf.convert_grb2nc(cfsdir, outfile=fcstfile, daterange=(idate,fdate), isanalysis=False)
+                verf.convert_grb2nc(cfsdir, outfile=fcstfile, daterange=(idate,fdate), isanalysis=False, vrbls=vrbls)
 
         # OK, we have the data downloaded, interpolated to 0.5deg latlon,
         # and converted to two netcdfs (analyses and forecast)
@@ -261,31 +243,38 @@ class MPASprocessed(xarray.Dataset):
         # the forecast gribs.... grr. )
         print('Loading CFSR/CFSv2 from netcdfs...')
         # Process the analyses first
-        analyses = xarray.open_dataset(anlpath, chunks=chunks)
+        analyses = xarray.open_dataset(anlpath)###########, chunks=chunks)
         # Rename the dimensions
         analyses.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
-        # Trim the last time off of the anlyses (precip)
-        analyses = analyses.isel(Time=range(analyses.dims['Time']-1))
+        if vrbls is None or 'prate' in vrbls or 'ulwtoa' in vrbls:
+            # Trim the last time off of the analyses (precip)
+            analyses = analyses.isel(Time=range(analyses.dims['Time']-1))
         datasets = [analyses]
+        types = ['CFSR']
         
         # Now process the forecast
         if not anlonly:
-            forecast = xarray.open_dataset(fcstpath, chunks=chunks)
+            forecast = xarray.open_dataset(fcstpath)#########, chunks=chunks)
             forecast.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
             # Prepend the t=0 analysis to the forecast (the initialization)
-            forecast = xarray.concat([analyses.isel(Time=0), forecast], dim='Time')
+            prepend = analyses.isel(Time=[0]).drop([var for var in analyses.variables.keys() if var not in forecast.variables.keys()])
+            forecast = xarray.concat([prepend, forecast], dim='Time')
             datasets.append(forecast)
+            types.append('CFSv2')
  
         # Need to store date info, because it is not stored in the MPAS netcdf
         # metadata by default
-        for dataset in [analyses, forecast]:
+        for dataset, type in zip(datasets, types):
+            dataset.attrs.update(idate=idate, dt=6, type=type, workdir=workdir)
             dataset.__class__ = cls # Change the class to MPASprocessed
-            dataset['idate'] = idate  # initialization date
-            dataset['dt'] = 6        # output frequency (hours)
-            dataset['type'] = 'CFS'
             # Add 'lat' and 'lon' variables so functions below still work
             dataset.update(dataset.assign(lat=analyses.variables['nLats']))
             dataset.update(dataset.assign(lon=analyses.variables['nLons']))
+            # Change precipitation from mm/s to mm/h
+            if 'prate1h' in dataset.variables.keys():
+                dataset['prate1h'] *= 3600.
+                dataset.update(dataset.assign(prate1d=dataset.variables['prate1h']*24.))
+                
         if anlonly: return analyses
         else:       return analyses, forecast
         
@@ -317,7 +306,7 @@ class MPASprocessed(xarray.Dataset):
         # and converted to netcdfs (one per variable)
         # Now we just need to load them in one xarray and select the desired dates
         print('Loading CFSR climatology from netcdfs...')
-        climo = xarray.open_mfdataset(climfiles, chunks=chunks)
+        climo = xarray.open_mfdataset(climfiles)######################, chunks=chunks)
         # Now let's only select the dates we want
         climdates = [datetime.utcfromtimestamp(dt.tolist()/1e9) for dt in climo['time'].values]
         des_dates = [(idate + timedelta(hours=6*x)).replace(year=1984) for x in \
@@ -338,13 +327,15 @@ class MPASprocessed(xarray.Dataset):
         climo.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
 
         # Store metadata
+        climo.attrs.update(idate=idate, dt=6, type='CFSRclim', workdir=climdir)
         climo.__class__ = cls # Change the class to MPASprocessed
-        climo['idate'] = idate  # initialization date
-        climo['dt'] = 6        # output frequency (hours)
-        climo['type'] = 'CFS'
         # Add 'lat' and 'lon' variables so functions below still work
         climo.update(climo.assign(lat=climo.variables['nLats']))
         climo.update(climo.assign(lon=climo.variables['nLons']))
+        # Change precipitation from mm/s to mm/h
+        if 'prate1h' in climo.variables.keys():
+            climo['prate1h'] *= 3600.
+            climo.update(climo.assign(prate1d=climo.variables['prate1h']*24.))
         return climo
     
     # For adding the "idate," "dt," and "type" attributes
@@ -352,6 +343,18 @@ class MPASprocessed(xarray.Dataset):
         self.__dict__[key] = value
 
 #==== Functions to get various useful attributes ==============================
+    def idate(self):
+        return self.attrs['idate']
+    def dt(self):
+        return self.attrs['dt']
+    def dx(self):
+        return self['lon'].values[1] - self['lon'].values[0]
+    def dy(self):
+        return self['lat'].values[1] - self['lat'].values[0]
+    def type(self):
+        return self.attrs['type']
+    def workdir(self):
+        return self.attrs['workdir']
     def ntimes(self):    
         return self.dims['Time']
     def ny(self):
@@ -363,17 +366,20 @@ class MPASprocessed(xarray.Dataset):
     def nvars(self):
         return len(self.vars())
     def vdates(self):
-        return np.array([self.idate +  timedelta(hours=t*self.dt) for t in range(self.ntimes())])
+        return np.array([self.idate() +  timedelta(hours=t*self.dt()) for t in range(self.ntimes())])
     def leadtimes(self):
-        return [timedelta_hours(self.idate, d) for d in self.vdates()]
+        return [timedelta_hours(self.idate(), d) for d in self.vdates()]
         
 #==== Get the lat/lon grid and area weights ==================================
     def latlons(self):
         """ Returns 1D lat and lon grids """
         return self['lat'].values, self['lon'].values
     
-    def area_weights(self):
-        return np.cos(np.radians(self['lat'].values))
+    def area_weights(self, asdataarray=False):
+        if asdataarray:
+            return np.cos(np.radians(self['lat']))
+        else:
+            return np.cos(np.radians(self['lat'].values))
     
 #==== Function to return a DataArray of the desired variable ==================
     def get_var(self, vrbl):
@@ -381,28 +387,43 @@ class MPASprocessed(xarray.Dataset):
             raise ValueError('"{}" not in list of valid variables'.format(vrbl))
         return self.data_vars[vrbl]
     
+#==== Drop variables from the xarray Dataset ===================================
+    def dropvars(self, vrbls):
+        """ Drops all variables in vrbls """
+        return self.drop(vrbls)
+    
+    def keepvars(self, vrbls):
+        """ Drops all variables NOT in vrbls """
+        return self.dropvars([var for var in self.vars() if var not in vrbls])
+        
 #==== Compute the total precipitation rate from rainc + rainnc ================
     def compute_preciprate(self, dt=3):
-        assert dt % self.dt == 0
-        assert self.type == 'MPAS'
+        assert dt % self.dt() == 0
+        assert self.type() == 'MPAS'
         raint = self['rainc'] + self['rainnc']
-        prate = (raint - raint.shift(Time=int(dt/self.dt)))
-        if dt==1: unitstr = 'mm/h'
-        else: unitstr = 'mm/{}h'.format(int(dt))
+        if dt==24:
+            prate = (raint - raint.shift(Time=1))
+            prate *= 24/self.dt()
+            unitstr = 'mm/d'
+            varname = 'prate1d'
+        else:
+            prate = (raint - raint.shift(Time=int(dt/self.dt())))
+            if dt==1: unitstr = 'mm/h'
+            else: unitstr = 'mm/{}h'.format(int(dt))
+            varname = 'prate{}h'.format(dt)
         prate = prate.assign_attrs(units=unitstr, long_name='precipitation rate')
-        varname = 'prate{}h'.format(dt)
         assignvar = {varname : prate}
         self.update(self.assign(**assignvar))
         print('Created new variable: "{}"'.format(varname))
     
 #==== Transform the dataset so all lons are positive ==========================
-    def restructure_lons(self):
+    def restructure_lons(self, verbose=False):
         """
         Restructures the Dataset so that longitudes go from 0 to 360 rather 
         than -180 to 180. (Needed for some Basemap projections)
         """
         if (self['lon'].values>=0).all():
-            print('All longitudes are positive; no need to restructure!')
+            if verbose: print('All longitudes are positive; no need to restructure!')
             return   
         # Find where the first non-negative longitude is
         li = 0
@@ -424,12 +445,9 @@ class MPASprocessed(xarray.Dataset):
     
 #==== Resample the fields temporally and returns the coarsened xarray =======
     def coarsen_temporally(self, new_dt):
-        assert new_dt % self.dt == 0
-        dt_ratio = int(new_dt / self.dt)
+        assert new_dt % self.dt() == 0
+        dt_ratio = int(new_dt / self.dt())
         newMPASproc = self.isel(Time=np.arange(self.ntimes())[::dt_ratio])
-        newMPASproc.__setitem__('dt', new_dt)
-        newMPASproc.__setitem__('idate', self.idate)
-        newMPASproc.__setitem__('type', self.type)
         return newMPASproc
         
 #==== Resamples the lat/lon grid by averaging within coarser grid boxes =====
@@ -447,29 +465,46 @@ class MPASprocessed(xarray.Dataset):
         lon_bins = np.append(newlons-dx/2, newlons[-1]+dx/2)
 
         # average within the latitude bins
-        newMPASproc = self.groupby_bins('lat', lat_bins, labels=newlats).mean(dim='nLats')
+        newMPASproc = self.groupby_bins('lat', lat_bins, labels=newlats).mean(dim='nLats', keep_attrs=True)
         # trim off the extra dimension added to lon                
         newMPASproc = newMPASproc.assign(lon=newMPASproc['lon'].isel(lat_bins=0).drop('lat_bins'))
         # average within the longitude bins
-        newMPASproc = newMPASproc.groupby_bins('lon', lon_bins, labels=newlons).mean(dim='nLons')
+        newMPASproc = newMPASproc.groupby_bins('lon', lon_bins, labels=newlons).mean(dim='nLons', keep_attrs=True)
         # trim off the extra dimension added to lat
         newMPASproc = newMPASproc.assign(lat=newMPASproc['lat'].isel(lon_bins=0).drop('lon_bins'))
         # rename/reorganize the dimensions
         newMPASproc = newMPASproc.rename({'lat_bins' : 'nLats' , 'lon_bins' : 'nLons'})
         newMPASproc = newMPASproc.transpose('Time','nLats','nLons')
         newMPASproc.__class__ = self.__class__
-        newMPASproc.__setitem__('dt', self.dt)
-        newMPASproc.__setitem__('idate', self.idate)
-        newMPASproc.__setitem__('type', self.type)
         return newMPASproc
-                               
+         
+#==== Return an interpolated field ==========================================
+    def interpolate_field(self, field, newlats, newlons):
+        from scipy.interpolate import interp2d
+        print('interpolating {}...'.format(field))
+        times = np.arange(self.ntimes())
+        lats, lons = self.latlons()
+        data = self[field].values
+        if lats[1] < lats[0]:
+            lats = lats[::-1]
+            data = data[:,::-1,:]
+        interpolated_data = np.zeros((len(times), len(newlats), len(newlons)))
+        for t in times:
+            print('time {} of {}'.format(t+1, len(times)))
+            f = interp2d(lons, lats, data[t,:,:])
+            interpolated_data[t,:,:] = f(newlons, newlats)
+        return interpolated_data
+                  
 #==== Meridionally average a field ==========================================
-    def hovmoller(self, field, lat_i=-15., lat_f=15.):
+    def hovmoller(self, field=None, lat_i=-15., lat_f=15.):
         lats = self['lat'].values
         yi = nearest_ind(lats, lat_i)
         yf = nearest_ind(lats, lat_f) + 1
-        subset = self.isel(nLats=range(yi,yf))[field] * self.area_weights()[yi:yf]
-        return subset.mean(dim='nLats', keep_attrs=True)
+        if field is None:
+            latband = self.isel(nLats=range(yi,yf)) * self.area_weights(asdataarray=True)
+        else:
+            latband = self.isel(nLats=range(yi,yf))[field] * self.area_weights()[None, yi:yf, None]
+        return latband.mean(dim='nLats', keep_attrs=True)
         
 #==== Average all fields or a single field between two times ==================
     def compute_timemean(self, field=None, dt_i=None, dt_f=None):
@@ -485,18 +520,17 @@ class MPASprocessed(xarray.Dataset):
 #==== Average the data to a coarser timescale (e.g., daily, weekly) ===========
     def temporal_average(self, timescale):
         """ [timescale] should be in hours """
-        assert timescale % self.dt == 0
+        assert timescale % self.dt() == 0
         indiv_times = []
         vdates = self.vdates()
-        ntsteps = int(timescale/self.dt)
+        ntsteps = int(timescale/self.dt())
         for t in np.arange(0, self.ntimes()-1, ntsteps):
-            avg_1time = self.compute_timemean(dt_i=vdates[t], dt_f=vdates[t+ntsteps]-timedelta(hours=self.dt))
+            avg_1time = self.compute_timemean(dt_i=vdates[t], 
+                                              dt_f=vdates[t]+timedelta(hours=timescale-self.dt()))
             indiv_times.append(avg_1time)
-        avgd_data = xarray.concat(indiv_times, dim='Time')
+        avgd_data = xarray.concat(indiv_times, dim='Time', data_vars='different')
         avgd_data.__class__ = self.__class__
-        avgd_data.__setitem__('dt', timescale)
-        avgd_data.__setitem__('idate', self.idate)
-        avgd_data.__setitem__('type', self.type)
+        avgd_data.attrs.update(dt=timescale)
         return avgd_data
         
 #==== Fetch the data from a subset of the grid ===============================
@@ -535,13 +569,61 @@ class MPASprocessed(xarray.Dataset):
             print('Fetching data at {:.02f}N {:.02f}E'.format(lats[lat_ind], lons[lon_ind]))
         # Return the data at that point
         return self[field].isel(nLats=lat_ind, nLons=lon_ind).values
-    
+        
+#==== Bandpass filter a desired field  ========================================
+    def bandpass_filter(self, field, freq_i=1/2400., freq_f=1/480., 
+                        wavenumbers=None, dim='Time'):
+        #from scipy.fftpack import rfft, irfft, fftfreq
+        from numpy.fft import rfft, irfft, fftfreq
+        
+        dimnum = self[field].dims.index(dim)
+        
+        if dim=='Time':
+            ds = self.dt()
+        elif dim=='nLats':
+            ds = self['lat'].values[1] - self['lat'].values[0]
+        elif dim=='nLons':
+            ds = self['lon'].values[1] - self['lon'].values[0]
+        else:
+            raise ValueError('invalid dimension {}'.format(dim))
+        
+        signal = self[field].values
+        W = fftfreq(self[field].shape[dimnum], d=ds)
+        f_signal = rfft(signal, axis=dimnum)
+
+        # If our original signal time was in seconds, this is now in Hz    
+        cut_f_signal = f_signal.copy()
+        if wavenumbers is not None and dim=='nLons':
+            cut = np.zeros(np.shape(cut_f_signal))
+            cut[:, :, wavenumbers] = 1
+            cut_f_signal *= cut
+        elif dimnum==0:
+            print([(w**-1)/24 for w in W])
+            cut_f_signal[(W < freq_i) + (W > freq_f), :, :] = 0
+        elif dimnum==1:
+            cut_f_signal[:, (W < freq_i) + (W > freq_f), :] = 0
+        elif dimnum==2:
+            cut_f_signal[:, :, (W < freq_i) + (W > freq_f)] = 0
+        else:
+            raise ValueError('Invalid dimenion number {}'.format(dimnum))
+
+        #self[field].values = irfft(cut_f_signal, axis=dimnum)
+        assignvar = {'{}_{}filt'.format(field, dim) : (('Time','nLats','nLons'), irfft(cut_f_signal, axis=dimnum))}
+        self.update(self.assign(**assignvar))
+
+#==== Apply a running mean to the data ========================================
+    def running_mean(self, field, N, dim='Time'):
+        from scipy.ndimage import uniform_filter1d
+        
+        dimnum = self[field].dims.index(dim)
+        filt_data = uniform_filter1d(self[field].values, N, axis=dimnum, mode='nearest')
+        assignvar = {'{}_{}-{}mean'.format(field, dim, N) : (('Time','nLats','nLons'), filt_data)}
+        self.update(self.assign(**assignvar))
+        
 #==== Function to save the xarray Dataset to a netcdf file ====================
-    def save_to_disk(self, filename='mpas_forecast_{:%Y%m%d%H}.nc'):
+    def save_to_disk(self, filename='{}/mpas_forecast_{:%Y%m%d%H}.nc'):
         """ Dump this object to disk """
-        self.to_netcdf(filename.format(self.idate))
-        
-        
+        self.to_netcdf(filename.format(self.workdir(), self.idate()))
         
 ################################################################################################
 # raw MPAS forecast output on Voronoi mesh
@@ -565,16 +647,11 @@ class MPASraw(xarray.Dataset):
         ncfiles = '{}/{}.*.nc'.format(workdir, outputstream)
         forecast = xarray.open_mfdataset(ncfiles, drop_variables=dropvars, 
                                          concat_dim='Time', chunks=chunks)
+        forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
         forecast.__class__ = cls
         # Let's make sure that this MPAS output stream has cell/edge/vertex info
         for var in ['cellsOnCell', 'cellsOnEdge', 'cellsOnVertex']:
             assert var in forecast.variables.keys()
-        # Need to store date info, because it is not stored in the MPAS netcdf
-        # metadata by default
-        forecast['idate'] = idate  # initialization date
-        forecast['dt'] = dt        # output frequency (days)
-        # store the working directory as an object attribute (for I/O)
-        forecast['workdir'] = workdir
         return forecast
 
     # For adding the "idate" and "dt" items above
@@ -582,6 +659,14 @@ class MPASraw(xarray.Dataset):
         self.__dict__[key] = value
         
     #==== Functions to get various useful attributes ==========================
+    def idate(self):
+        return self.attrs['idate']
+    def dt(self):
+        return self.attrs['dt']
+    def type(self):
+        return self.attrs['type']
+    def workdir(self):
+        return self.attrs['workdir']
     def ntimes(self): 
         return self.dims['Time']
     def ncells(self):
@@ -595,9 +680,9 @@ class MPASraw(xarray.Dataset):
     def nvars(self):
         return len(self.vars())
     def vdates(self):
-        return np.array([self.idate +  timedelta(hours=t*self.dt) for t in range(self.ntimes())])
+        return np.array([self.idate() +  timedelta(hours=t*self.dt()) for t in range(self.ntimes())])
     def leadtimes(self):
-        return [timedelta_hours(self.idate, d) for d in self.vdates()]
+        return [timedelta_hours(self.idate(), d) for d in self.vdates()]
     
     #==== Get the lat/lon locations of the cells/edges/vertices ===============
     def cell_latlons(self):
@@ -609,24 +694,24 @@ class MPASraw(xarray.Dataset):
     
     #==== Compute the total precipitation rate from rainc + rainnc ============
     def compute_preciprate(self, dt=3):
-        assert dt % self.dt == 0
+        assert dt % self.dt() == 0
         raint = self['rainc'] + self['rainnc']
-        prate = (raint - raint.shift(Time=int(dt/self.dt)))
+        prate = (raint - raint.shift(Time=int(dt/self.dt())))
         if dt==1: unitstr = 'mm/h'
         else: unitstr = 'mm/{}h'.format(int(dt))
         prate = prate.assign_attrs(units=unitstr, long_name='precipitation rate')
         varname = 'prate{}h'.format(dt)
-        attrs = {varname : prate}
-        self.update(self.assign(**attrs))
+        assignvar = {varname : prate}
+        self.update(self.assign(**assignvar))
         print('Created new variable: "{}"'.format(varname))
     
     #==== Save the terrain elevation (on the native grid) as a variable =======
     def get_terrain(self, suffix='.init.nc'):
         # Because terrain is in the default diagnostics stream, we can get it
         # from a different file
-        for file in os.listdir(self.workdir):
+        for file in os.listdir(self.workdir()):
             if file.endswith(suffix):
-                ncfile = '{}/{}'.format(self.workdir, file)
+                ncfile = '{}/{}'.format(self.workdir(), file)
                 break
 
         xry_dset = xarray.open_dataset(ncfile)
@@ -767,7 +852,7 @@ class MPASraw(xarray.Dataset):
     #==== Function to save the xarray Dataset to a netcdf file ====================
     def save_to_disk(self, filename='{}/mpas_raw_forecast_{:%Y%m%d%H}.nc'):
         """ Dump this object to disk """
-        self.to_netcdf(filename.format(self.workdir, self.idate))
+        self.to_netcdf(filename.format(self.workdir(), self.idate()))
             
     
 ###############################################################################################
