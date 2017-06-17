@@ -19,6 +19,8 @@ def draw_projection(ax, proj, mapcol='k'):
         return draw_merc_borneo(ax, mapcol=mapcol)
     elif proj=='mercMC':
         return draw_merc_mc(ax, mapcol=mapcol)
+    elif proj=='mercWarmPool':
+        return draw_merc_warmpool(ax, mapcol=mapcol)
     elif proj=='cylCONUS':
         return draw_cyl_conus(ax, mapcol=mapcol)
     elif proj=='cyl_seUS':
@@ -33,6 +35,8 @@ def draw_projection(ax, proj, mapcol='k'):
         return draw_robin_global(ax, mapcol=mapcol)
     elif proj=='orthoAmerEQ':
         return draw_ortho_americas(ax, mapcol=mapcol)
+    elif proj=='mercPNA':
+        return draw_merc_pna(ax, mapcol=mapcol)
     else:
     	raise ValueError("Unknown projection {}".format(proj))
     
@@ -89,6 +93,21 @@ def draw_merc_mc(ax, mapcol='k'):
     m.drawcountries(color=mapcol)
     m.drawparallels(np.arange(-90.,90,10.),labels=[1,0,0,0],fontsize=10)
     m.drawmeridians(np.arange(0.,360.,10.),labels=[0,0,0,1],fontsize=10)
+    return m
+
+def draw_merc_warmpool(ax, mapcol='k'):
+    """
+    A Mercator projection over the Indo-Pacific Warm Pool
+    """
+    m = Basemap(ax=ax,projection='merc',lon_0=125.,lat_0=90.,lat_ts=0.,\
+                llcrnrlat=-30.,urcrnrlat=30.,\
+                llcrnrlon=50.,urcrnrlon=200.,\
+                rsphere=6371200.,resolution='l',area_thresh=10000)
+    m.drawcoastlines(linewidth=1.7, color=mapcol)
+    m.drawstates(color=mapcol)
+    m.drawcountries(color=mapcol)
+    m.drawparallels(np.arange(-90.,90,30.),labels=[1,0,0,0],fontsize=10)
+    m.drawmeridians(np.arange(0.,360.,30.),labels=[0,0,0,1],fontsize=10)
     return m
 
 def draw_cyl_conus(ax, mapcol='k'):
@@ -176,3 +195,15 @@ def draw_ortho_americas(ax, mapcol='k'):
     m.drawmeridians(np.arange(0.,360.,30.),labels=[0,0,0,0])
     return m
 
+def draw_merc_pna(ax, mapcol='k'):
+    """
+    A Mercator projection over the PNA teleconnection region (WPac --> Eastern US)
+    """
+    m = Basemap(ax=ax,projection='merc',lon_0=200.,lat_0=90.,lat_ts=0.,\
+                llcrnrlat=0.,urcrnrlat=75.,\
+                llcrnrlon=100.,urcrnrlon=310.,\
+                rsphere=6371200.,resolution='l',area_thresh=10000)
+    m.drawcoastlines(linewidth=1.7, color=mapcol)
+    m.drawparallels(np.arange(-90.,90,30.),labels=[1,0,0,0],fontsize=10)
+    m.drawmeridians(np.arange(0.,360.,30.),labels=[0,0,0,1],fontsize=10)
+    return m
