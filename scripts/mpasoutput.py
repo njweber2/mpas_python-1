@@ -1,35 +1,43 @@
 #!/usr/bin/env python
-from __future__ import print_function
 import numpy as np
 import xarray
 from datetime import datetime, timedelta
-import xarray.ufuncs as xu
 from copy import deepcopy
 import os
 
-###############################################################################################
-# MPAS forecast on a lat-lon grid
-###############################################################################################
+################################################################################################
+################################################################################################
+# MPAS forecast (or other data) on a lat-lon grid
+################################################################################################
+################################################################################################
 
-class MPASprocessed(xarray.Dataset):
+class LatLonData(xarray.Dataset):
     """
-    Define a multivariate Dataset composed of MPAS forecast output.
+    Define a multivariate Dataset composed of MPAS forecast output or other geophysical
+    data on a lat/lon grid.
     """
       
-    # THE FOLLOWING ARE SEVERAL CLASS METHODS USED TO INITIALIZE AN MPASprocessed
+    # THE FOLLOWING ARE SEVERAL CLASS METHODS USED TO INITIALIZE A LatLonData
     # OBJECT FROM DIFFERENT DATASETS. THE IDEA IS TO HAVE ALL GRIDS (MPAS FORECASTS,
     # ANALYSIS GRIDS, OTHER MODEL FORECASTS, SATELLITE OBSERVATIONS, ETC.) STORED
     # IN THE SAME OBJECT TYPE FOR SLICK AND EASY MANIPULATION/COMPARISON
     
     @classmethod
-    def from_netcdf(cls, ncfile, workdir, idate, dt, chunks={'Time': 10}):
+    def from_netcdf(cls, ncfile, workdir, idate, dt, chunks=None):
         """
-        Initializes a new MPASprocessed object when given
+        Initializes a new LatLonData object when given
         a processed MPAS output file (netcdf)
         
         MPAS files are assumed to be on a lat lon grid; i.e., raw MPAS diag.nc (or any 
         other stream) files converted with the convert_mpas utility:
         https://github.com/mgduda/convert_mpas/
+        
+        Requires:
+        ncfile ---> string: input netcdf filename
+        workdir --> string: path to the input/ouput directory
+        idate ----> datetime object indicating the data start date
+        dt -------> the number of hours between each data time
+        chunks ---> dictionary for chunking the xarray contents to dask arrays
         """
         forecast = xarray.open_dataset(ncfile, chunks=chunks)
         forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
@@ -37,12 +45,11 @@ class MPASprocessed(xarray.Dataset):
         return forecast
     
     @classmethod
-    def from_latlon_grid(cls, lats, lons, workdir, idate, dt, inputstream='diag.*.nc',
-                         meshinfofile='*init.nc', outputfile='diags_interp.nc',
-                         chunks={'Time': 10}):
+    def from_latlon_grid(cls, lats, lons, workdir, idate, dt, inputstream='diag',
+                         meshinfofile='*init.nc', outputfile='diags_interp.nc', chunks=None):
         """
-        Initializes a new MPASprocessed object when given
-        a desired lat/lon grid
+        Initializes a new LatLonData object when given
+        a desired lat/lon grid and MPAS output stream name
         
         raw MPAS diag.nc data are interpolated to a regular
         lat/lon grid using the convert_mpas utility:
@@ -50,10 +57,13 @@ class MPASprocessed(xarray.Dataset):
         
         Requires:
         lats, lons --> 1D numpy arrays of latitudes and longitudes
-        workdir -----> string path to the input/output
-        inputstream -> wildcard indicating all the raw MPAS netcdf files to be converted
+        workdir -----> string: path to the input/output directory
+        idate -------> datetime object indicating the data start date
+        dt ----------> the number of hours between each data time
+        inputstream -> string: the MPAS output stream to be loaded (e.g., "diag" --> "diag.*.nc"
         meshinfofile > a filename (or wildcard) pointing to a netcdf with mesh info variables
         outputfile --> the name of the final (interpolated) netcdf file
+        chunks ------> dictionary for chunking the xarray contents to dask arrays
         """
         from subprocess import Popen
         import time
@@ -81,14 +91,14 @@ class MPASprocessed(xarray.Dataset):
                 Popen(['rm -f {}/latlon.nc'.format(workdir)], shell=True).wait()
             print('Interpolating {} to regularly-spaced lat-lon grid...'.format(inputstream))
             start = time.time()
-            command = 'cd {}; ./convert_mpas {} {}'.format(workdir,meshinfofile,inputstream)
+            command = 'cd {}; ./convert_mpas {} {}.*.nc'.format(workdir,meshinfofile,inputstream)
             Popen([command], shell=True).wait()   # will generate a latlon.nc file
             end = time.time()
             print('Elapsed time: {:.2f} min'.format((end-start)/60.))
             # rename the output file
             Popen(['cd {}; mv latlon.nc {}'.format(workdir, outputfile)], shell=True).wait()
         
-        # Finally, create our MPASprocessed object like normal
+        # Finally, create our LatLonData object via xarray
         forecast = xarray.open_dataset('{}/{}'.format(workdir, outputfile), chunks=chunks)
         forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
         forecast.__class__ = cls
@@ -96,13 +106,18 @@ class MPASprocessed(xarray.Dataset):
 
     @classmethod
     def from_GFS_netcdf(cls, workdir, idate, fdate, ncfile='gfs_analyses.nc',
-                        nctable='gfs.table', chunks={'time': 10}):
+                        nctable='gfs.table', chunks=None):
         """
-        Initializes a new MPASprocessed object when given
+        Initializes a new LatLonData object when given
         a 3-hourly GFS analysis file (netcdf)
         
-        workdir -----> string path to the input/output
-        ncfile ------> netcdf of GFS analyses to be loaded via xarray
+        Requires:
+        workdir --> string: path to the input/output directory
+        idate ----> datetime object indicating the data start date
+        fdate ----> datetime object indicating the data end date
+        ncfile ---> string: netcdf of GFS analyses to be loaded via xarray
+        nctable --> string: text file (.table) used for grb2nc conversion
+        chunks ---> dictionary for chunking the xarray contents to dask arrays
         """
         import verification as verf
         infile = '{}/GFS_ANL/{}'.format(workdir, ncfile)
@@ -125,11 +140,14 @@ class MPASprocessed(xarray.Dataset):
     @classmethod
     def from_TRMM_hdfs(cls, workdir, idate, fdate, ftpusername):
         """
-        Initializes a new MPASprocessed object from a directory of
+        Initializes a new LatLonData object from a directory of
         3-hourly TRMM 3B42RT precipitation hdf files
         
-        workdir -----> string path to the input/output
-        ftpusername -> PPS email account (string) for downloading TRMM/GPM data via ftp
+        Requires:
+        workdir -----> string: path to the input/output directory
+        idate -------> datetime object indicating the data start date
+        fdate -------> datetime object indicating the data end date
+        ftpusername -> string: PPS email account for downloading TRMM/GPM data via ftp
         """
         from subprocess import check_output
         import verification as verf
@@ -171,11 +189,15 @@ class MPASprocessed(xarray.Dataset):
     @classmethod
     def from_GPM_hdfs(cls, workdir, idate, fdate, ftpusername, ncfile='gpm.nc'):
         """
-        Initializes a new MPASprocessed object from a directory of
+        Initializes a new LatLonData object from a directory of
         half-hourly GPM IMERG precipitation hdf files
         
-        workdir -----> string path to the input/output
-        ftpusername -> PPS email account (string) for downloading TRMM/GPM data via ftp
+        Requires:
+        workdir -----> string: path to the input/output directory
+        idate -------> datetime object indicating the data start date
+        fdate -------> datetime object indicating the data end date
+        ftpusername -> string: PPS email account for downloading TRMM/GPM data via ftp
+        ncfile ------> string: netcdf file of processed IMERG data
         """
         import verification as verf
         import h5py
@@ -207,13 +229,19 @@ class MPASprocessed(xarray.Dataset):
     
     @classmethod
     def from_CFSRR_netcdfs(cls, workdir, idate, fdate, nctable='cfs.table', 
-                           anlonly=False, chunks={'time': 10}, vrbls=None):
+                           anlonly=False, chunks=None, vrbls=None):
         """
-        Initializes two new MPASprocessed objects (analyses and forecasts) when pointed
+        Initializes two new LatLonData objects (analyses and forecasts) when pointed
         to the 6-hourly CFSR/CFSv2 netcdfs
 
-        workdir -----> string path to the input/output
-        ncfile ------> netcdf of GFS analyses to be loaded via xarray
+        Requires:
+        workdir --> string: path to the input/output directory
+        idate ----> datetime object indicating the data start date
+        fdate ----> datetime object indicating the data end date
+        nctable --> string: text file (.table) used for grb2nc conversion
+        anlonly --> bool: are we processing ONLY analysis (CFSR) data?
+        chunks ---> dictionary for chunking the xarray contents to dask arrays
+        vrbls ----> list of variables to process (if None, all will be processed)
         """
         import verification as verf
         cfsdir = '{}/CFS'.format(workdir)
@@ -254,7 +282,7 @@ class MPASprocessed(xarray.Dataset):
         
         # Now process the forecast
         if not anlonly:
-            forecast = xarray.open_dataset(fcstpath)#########, chunks=chunks)
+            forecast = xarray.open_dataset(fcstpath, chunks=chunks)
             forecast.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
             # Prepend the t=0 analysis to the forecast (the initialization)
             prepend = analyses.isel(Time=[0]).drop([var for var in analyses.variables.keys() if var not in forecast.variables.keys()])
@@ -266,7 +294,7 @@ class MPASprocessed(xarray.Dataset):
         # metadata by default
         for dataset, type in zip(datasets, types):
             dataset.attrs.update(idate=idate, dt=6, type=type, workdir=workdir)
-            dataset.__class__ = cls # Change the class to MPASprocessed
+            dataset.__class__ = cls # Change the class to LatLonData
             # Add 'lat' and 'lon' variables so functions below still work
             dataset.update(dataset.assign(lat=analyses.variables['nLats']))
             dataset.update(dataset.assign(lon=analyses.variables['nLons']))
@@ -279,14 +307,16 @@ class MPASprocessed(xarray.Dataset):
         else:       return analyses, forecast
         
     @classmethod
-    def from_CFSclimo_netcdfs(cls, climdir, idate, fdate, nctable='cfs.table', 
-                              chunks={'time': 10}):
+    def from_CFSclimo_netcdfs(cls, climdir, idate, fdate, nctable='cfs.table', chunks=None):
         """
-        Initializes two new MPASprocessed objects (analyses and forecasts) when pointed
-        to the 6-hourly CFSR/CFSv2 netcdfs
+        Initializes a new LatLonData object from 6-hourly CFSR calibration climatology data
 
-        workdir -----> string path to the input/output
-        ncfile ------> netcdf of GFS analyses to be loaded via xarray
+        Requires:
+        climdir --> string: path to the directory with the climatology data files
+        idate ----> datetime object indicating the data start date
+        fdate ----> datetime object indicating the data end date
+        nctable --> string: text file (.table) used for grb2nc conversion
+        chunks ---> dictionary for chunking the xarray contents to dask arrays
         """
         import verification as verf
         from subprocess import check_output
@@ -306,7 +336,7 @@ class MPASprocessed(xarray.Dataset):
         # and converted to netcdfs (one per variable)
         # Now we just need to load them in one xarray and select the desired dates
         print('Loading CFSR climatology from netcdfs...')
-        climo = xarray.open_mfdataset(climfiles)######################, chunks=chunks)
+        climo = xarray.open_mfdataset(climfiles, chunks=chunks)
         # Now let's only select the dates we want
         climdates = [datetime.utcfromtimestamp(dt.tolist()/1e9) for dt in climo['time'].values]
         des_dates = [(idate + timedelta(hours=6*x)).replace(year=1984) for x in \
@@ -328,7 +358,7 @@ class MPASprocessed(xarray.Dataset):
 
         # Store metadata
         climo.attrs.update(idate=idate, dt=6, type='CFSRclim', workdir=climdir)
-        climo.__class__ = cls # Change the class to MPASprocessed
+        climo.__class__ = cls # Change the class to LatLonData
         # Add 'lat' and 'lon' variables so functions below still work
         climo.update(climo.assign(lat=climo.variables['nLats']))
         climo.update(climo.assign(lon=climo.variables['nLons']))
@@ -337,10 +367,6 @@ class MPASprocessed(xarray.Dataset):
             climo['prate1h'] *= 3600.
             climo.update(climo.assign(prate1d=climo.variables['prate1h']*24.))
         return climo
-    
-    # For adding the "idate," "dt," and "type" attributes
-    def __setitem__(self, key, value):
-        self.__dict__[key] = value
 
 #==== Functions to get various useful attributes ==============================
     def idate(self):
@@ -625,38 +651,58 @@ class MPASprocessed(xarray.Dataset):
         """ Dump this object to disk """
         self.to_netcdf(filename.format(self.workdir(), self.idate()))
         
+        
+################################################################################################
 ################################################################################################
 # raw MPAS forecast output on Voronoi mesh
 ################################################################################################
+################################################################################################
 
-
-class MPASraw(xarray.Dataset):
+class MPASmeshData(xarray.Dataset):
     """Define a multivariate Dataset composed of MPAS forecast output."""
-        
+    
+    # This is a list of all the variables describing the Voronoi mesh structure
+    # (needed for navigation among the grid cells)
+    global meshvars
+    meshvars = ['latCell','lonCell','xCell','yCell','zCell','indexToCellID','latEdge','lonEdge','xEdge',
+                'yEdge','zEdge','indexToEdgeID','latVertex','lonVertex','xVertex','yVertex','zVertex',
+                'indexToVertexID','cellsOnEdge','nEdgesOnCell','nEdgesOnEdge','edgesOnCell','edgesOnEdge',
+                'weightsOnEdge','dvEdge','dcEdge','angleEdge','areaCell','areaTriangle','cellsOnCell',
+                'verticesOnCell','verticesOnEdge','edgesOnVertex','cellsOnVertex','kiteAreasOnVertex',
+                'meshDensity','zgrid','fzm','fzp','zz']
     @classmethod
-    def from_netcdf(cls, workdir, idate, dt, dropvars=[], outputstream='diag',
-                    chunks={'Time': 10}):
+    def from_netcdf(cls, workdir, idate, dt, inputstream='diag',
+                    meshinfofile='*init.nc', chunks=None):
         """
-        Initializes a new MPASraw object when given
+        Initializes a new MPASmeshData object when given
         a list of MPAS output files (netcdf)
         
         MPAS files are assumed to be raw output from the model, 
         e.g., history.*.nc or diag.*.nc files.
+        
+        Requires:
+        workdir -----> string: path to the input/output directory
+        idate -------> datetime object indicating the data start date
+        dt ----------> the number of hours between each data time
+        inputstream -> string: the MPAS output stream to be loaded (e.g., "diag" --> "diag.*.nc"
+        meshinfofile > a filename (or wildcard) pointing to a netcdf with mesh info variables
+        outputfile --> the name of the final (interpolated) netcdf file
+        chunks ------> dictionary for chunking the xarray contents to dask arrays
         """
         assert isinstance(idate, datetime)
-        ncfiles = '{}/{}.*.nc'.format(workdir, outputstream)
-        forecast = xarray.open_mfdataset(ncfiles, drop_variables=dropvars, 
-                                         concat_dim='Time', chunks=chunks)
+        ncfiles = '{}/{}.*.nc'.format(workdir, inputstream)
+        forecast = xarray.open_mfdataset(ncfiles, concat_dim='Time', chunks=chunks)
+        meshinfo = xarray.open_mfdataset('{}/{}'.format(workdir, meshinfofile))
+        # Let's make sure that this MPAS output stream has cell/edge/vertex info
+        for var in meshvars:
+            if var not in forecast.variables.keys():
+                meshvar = meshinfo[var]
+                assignvar = {var : meshvar}
+                forecast.update(forecast.assign(**assignvar))
         forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
         forecast.__class__ = cls
-        # Let's make sure that this MPAS output stream has cell/edge/vertex info
-        for var in ['cellsOnCell', 'cellsOnEdge', 'cellsOnVertex']:
-            assert var in forecast.variables.keys()
+                
         return forecast
-
-    # For adding the "idate" and "dt" items above
-    def __setitem__(self, key, value):
-        self.__dict__[key] = value
         
     #==== Functions to get various useful attributes ==========================
     def idate(self):
@@ -683,6 +729,15 @@ class MPASraw(xarray.Dataset):
         return np.array([self.idate() +  timedelta(hours=t*self.dt()) for t in range(self.ntimes())])
     def leadtimes(self):
         return [timedelta_hours(self.idate(), d) for d in self.vdates()]
+    
+    #==== Drop variables from the xarray Dataset ===================================
+    def dropvars(self, vrbls):
+        """ Drops all variables in vrbls """
+        return self.drop(vrbls)
+    
+    def keepvars(self, vrbls):
+        """ Drops all variables NOT in vrbls """
+        return self.dropvars([var for var in self.vars() if var not in vrbls])
     
     #==== Get the lat/lon locations of the cells/edges/vertices ===============
     def cell_latlons(self):
@@ -763,7 +818,7 @@ class MPASraw(xarray.Dataset):
         return self[field].isel(**attrs).values
         
     #==== Interpolate a field onto a regular lat/lon grid =========================
-    def interp_field(self, field, date, lats=np.arange(-90, 91, 1), 
+    def interpolate_field(self, field, date, lats=np.arange(-90, 91, 1), 
                      lons=np.arange(0, 360, 1)):
         """ Adapted from mpas_contour_plot.py by Luke Madaus """
         from matplotlib.mlab import griddata

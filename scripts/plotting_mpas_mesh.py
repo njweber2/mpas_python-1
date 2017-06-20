@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 A library of functions for plotting MPAS output
-Designed for use with the MPASraw class, which stores MPAS forecast output on its native mesh
+Designed for use with the MPASmeshData class, which stores MPAS forecast output on its native mesh
 """
 
 import numpy as np
@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from color_maker.color_maker import color_map
 from plotting_mpas_latlon import truncate_colormap, get_contour_levs, draw_fig_axes
 from datetime import datetime
-from mpasoutput import MPASraw
+from mpasoutput import MPASmeshData
 
 #############################################################################################################
 
@@ -26,8 +26,8 @@ def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
     import matplotlib.patches as mpatches
     print("Defining patch collection on MPAS grid...")
 
-    if not isinstance(mpasfname, MPASraw):
-        mpasfcst = MPASraw(mpasfname,idate,dt)
+    if not isinstance(mpasfname, MPASmeshData):
+        mpasfcst = MPASmeshData(mpasfname,idate,dt)
     else:
         mpasfcst = mpasfname
         
@@ -92,7 +92,7 @@ def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vm
                    cmap=color_map('OceanLakeLandSnow'), title=None, time=0):
     """
     Make a pcolor-type plot on the MPAS native mesh
-    fcst_xry ---> an MPASraw object
+    fcst_xry ---> an MPASmeshData object
     """
     import _pickle as cPickle
     
@@ -136,7 +136,7 @@ def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vm
 def plot_mesh(m, ax, fcst_xry, picklefile=None, title='MPAS Voronoi mesh'):
     """
     Draw the MPAS Voronoi mesh over map m
-    fcst_xry ---> an MPASraw object
+    fcst_xry ---> an MPASmeshData object
     """
     import _pickle as cPickle
     

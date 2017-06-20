@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 A library of functions for plotting MPAS output
-Designed for use with the MPASprocessed class, which stores MPAS forecast output a lat-lon grid
+Designed for use with the LatLonData class, which stores MPAS forecast output a lat-lon grid
 """
 
 import numpy as np

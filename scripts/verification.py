@@ -662,7 +662,7 @@ def compute_temporal_error(field, fcst, anl, err='mae', t1=None, t2=None):
       
     # Compute the temporal error at each grid point
     # This will be SLOW unless the data is divided into chunks 
-    # (see "chunks" option in MPASprocessed class, or on xarray.Dataset page)
+    # (see "chunks" option in LatLonData class, or on xarray.Dataset page)
 
     # Mean Absolute Error
     if err.lower() == 'mae':
