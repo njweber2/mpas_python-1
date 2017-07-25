@@ -13,19 +13,30 @@ from mpasoutput import MPASmeshData
 
 #############################################################################################################
 
-def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
-                         idate=datetime(2017,4,1,0), dt=6, bmap=None):
+def mpas_grid_to_patches(mpasfname, picklefile='mpas_paths.pckl',
+                         idate=datetime(2017,4,1,0), dt=6, bmap=None, verbose=False):
     """ 
     Function to create a collection of patches in Basemap plotting
     coordinates that define the cells of the MPAS mesh 
     Written by Luke Madaus.
+    
+    Requires:
+    mpasfname --> either MPASmeshData object or working directory with MPAS output (.nc)
+    picklefile -> file to store the patch collection (string)
+    idate ------> forecast initialization date (datetime object)
+    dt ---------> time interval (hours) for the forecast
+    bmap -------> Basemap object to project coordinates onto
+    
     """
     import _pickle as cPickle
     import matplotlib
     import matplotlib.path as mpath
     import matplotlib.patches as mpatches
-    print("Defining patch collection on MPAS grid...")
+    assert bmap is not None
+    
+    if verbose: print("Defining patch collection on MPAS grid...")
 
+    # Load the Dataset
     if not isinstance(mpasfname, MPASmeshData):
         mpasfcst = MPASmeshData(mpasfname,idate,dt)
     else:
@@ -43,11 +54,11 @@ def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
     lonvertex = mpasfcst['lonVertex'].values
 
     patches = [None] * nCells
-    print("    Total num cells:", nCells)
+    if verbose: print("    Total num cells:", nCells)
     # Need a collection of lats and lons for each vertex of each cell
     for c in range(nCells):
         if c % 50000 == 0:
-            print("        On:", c)
+            if verbose: print("        On:", c)
         # Each collection of vertices has a length of maxEdges.  Need to figure
         # out how many vertices are ACTUALLY on the cell, as the rest is just
         # padded with junk data
@@ -79,7 +90,7 @@ def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
     # Now crate a patch collection
     p = matplotlib.collections.PatchCollection(patches)
     # Archive for future use
-    print("    Archiving paths...")
+    if verbose: print("    Archiving patches...")
     outfile = open(picklefile,'wb')
     cPickle.dump(p, outfile)
     outfile.close()
@@ -91,15 +102,25 @@ def mpas_grid_to_patches(mpasfname='../output.nc', picklefile='mpas_paths.pckl',
 def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vmax=3000.,
                    cmap=color_map('OceanLakeLandSnow'), title=None, time=0):
     """
-    Make a pcolor-type plot on the MPAS native mesh
+    Make a pcolor-type plot on the MPAS native mesh.
+    Adapted from script by Luke Madaus.
+    
+    Requires:
+    m, ax, cax -> Basemap, axis, and colormap axis objects
     fcst_xry ---> an MPASmeshData object
+    var --------> name of the variable to be plotted (string)
+    picklefile -> the pickle file for loading/saving the patch collection (string)
+    vmin, vmax -> min/max pcolor levels
+    cmap -------> colormap for the pcolor fill
+    title ------> title of the figure (string)
+    time -------> index of the time to be plotted (int)
     """
     import _pickle as cPickle
     
     if picklefile is None:
         picklefile = '{}/stere_conus_24k_mesh.pckl'.format(fcst_xry.workdir)
         
-    # Create mesh patch file if it doesn't exist already
+    # Create mesh patch collection picklefile if it doesn't exist already
     try:
         patchfile = open(picklefile,'rb')
         p = cPickle.load(patchfile)
@@ -128,20 +149,25 @@ def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vm
         ax.text(0.0, 1.015, title, transform=ax.transAxes, ha='left', va='bottom', fontsize=15)
         ax.text(1.0, 1.009, 'valid: {:%Y-%m-%d %H:00}'.format(fcst_xry.vdates()[time]),
                 transform=ax.transAxes, ha='right', va='bottom', fontsize=12)
-        ax.text(1.0, 1.048, 'init: {:%Y-%m-%d %H:00}'.format(fcst_xry.idate), 
+        ax.text(1.0, 1.048, 'init: {:%Y-%m-%d %H:00}'.format(fcst_xry.idate()), 
                 transform=ax.transAxes, ha='right', va='bottom', fontsize=12)
         
 #############################################################################################################
 
 def plot_mesh(m, ax, fcst_xry, picklefile=None, title='MPAS Voronoi mesh'):
     """
-    Draw the MPAS Voronoi mesh over map m
+    Draw the MPAS Voronoi mesh structure on a map
+    
+    Requires:
+    m, ax ------> Basemap and axis objects
     fcst_xry ---> an MPASmeshData object
+    picklefile -> the pickle file for loading/saving the patch collection (string)
+    title ------> title of the figure (string)
     """
     import _pickle as cPickle
     
     if picklefile is None:
-        picklefile = '{}/stere_conus_24k_mesh.pckl'.format(fcst_xry.workdir)
+        picklefile = '{}/stere_conus_24k_mesh.pckl'.format(fcst_xry.workdir())
         
     # Create mesh patch file if it doesn't exist already
     try:

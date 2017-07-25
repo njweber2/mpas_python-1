@@ -3,7 +3,11 @@
 Functions for downloading/processing verification datasets.
 
 Available datasets with this module:
+- CFSR reforecasts, analyses, and climatology (0.5 deg, 6-hourly)
+- CFSv2 operational forecasts and analyses (0.5 deg, 6-hourly)
 - GFS analyses (0.5 deg, 3-hourly)
+- GPM IMERG precipitation data (0.1 deg, half-hourly)
+- TRMM 3B42 precipitation data (0.25 deg, 3-hourly)
 """
 
 import numpy as np
@@ -18,6 +22,7 @@ from color_maker.color_maker import color_map
 #############################################################################################################
 
 def remove_duplicates(values):
+    """Removes duplicates from a list of values"""
     output = []
     seen = set()
     for value in values:
@@ -29,7 +34,7 @@ def remove_duplicates(values):
     return output
 
 def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None,
-                   isanalysis=True, interp=True, gribtag=None, vrbls=None):
+                   isanalysis=True, interp=True, gribtag=None, vrbls=None, verbose=False):
     """
     Converts downloaded NCEP gribs (forecasts or analyses) to netcdf, 
     retaining only the dates, forecast types, and variables designated 
@@ -38,7 +43,17 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
     Optionally, the gribs are all interpolated to a 0.5-degree lat-lon grid
     before conversion to netCDF (to ensure compatibility for combination)
     
-    Requires the wgrib2 utility.
+    Requires:
+    *the wgrib2 utility*
+    ncdir ------> directory containing the gribs files (where the netcdf will be output)
+    nctable ----> name of table file used in the wgrib2 conversion command 
+                  (can be either full path or just filename, assuming it is in [ncdir])
+    outfile ----> name of the netcdf file to be created
+    daterange --> a tuple of two datetime objects
+    isanalysis -> do the gribs we are processing contain analysis data?
+    interp -----> are we interpolating the data to a 0.5-deg lat-lon grid?
+    gribtag ----> string at the front of the desired gribs' file names
+    vrbls ------> a list of the desired variables
     """
     from subprocess import check_output, Popen
     import time
@@ -46,10 +61,13 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
     
     ncoutfile = '{}/{}'.format(ncdir, outfile)
     if os.path.isfile(ncoutfile):
-        print('{} already exists!'.format(outfile))
+        if verbose: print('{} already exists!'.format(outfile))
         return
     # Point to the nc_table
-    tablefile = '{}/{}'.format(ncdir, nctable)
+    if nctable[0] == '/':
+        tablefile = nctable
+    else:
+        tablefile = '{}/{}'.format(ncdir, nctable)
     assert os.path.isfile(tablefile)
     
     # List the gribs to be converted
@@ -122,10 +140,10 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
     # to one netcdf file
     start = time.time()
     for g, grbfile in enumerate(grbfiles):
-        print('processing grib {} of {}...'.format(g+1, len(grbfiles)))
-        print(grbfile)
+        if verbose: print('processing grib {} of {}...'.format(g+1, len(grbfiles)))
+        if verbose: print(grbfile)
         if interp:
-            print('  interpolating...')
+            if verbose: print('  interpolating...')
             interpcomm = 'wgrib2 {} {} -new_grid_vectors U:V -new_grid latlon 0:720:0.5 -90:361:0.5 temp.grb2'
             interpcomm = interpcomm.format(grbfile, matchtag)
             Popen([interpcomm], shell=True).wait()
@@ -134,14 +152,14 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
         else:
             convertcomm = 'wgrib2 {} {} -nc_table {} -netcdf {}'
             convertcomm = convertcomm.format(grbfile, matchtag, tablefile, ncoutfile)
-        print('  converting to netcdf...')
+        if verbose: print('  converting to netcdf...')
         if os.path.isfile(ncoutfile):
             splits = convertcomm.split('-nc_table')
             convertcomm = splits[0] + '-append -nc_table' + splits[1]
         Popen([convertcomm], shell=True).wait()
         if interp: Popen(['rm -f temp.grb2'], shell=True).wait()
     end = time.time()
-    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    if verbose: print('Elapsed time: {:.2f} min'.format((end-start)/60.))
     return
 
 #############################################################################################################
@@ -150,11 +168,17 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
 cfs_vars = ['chi200', 'prate', 'pressfc', 'psi200', 'pwat', 'tmp2m',
             'tmpsfc', 'ulwtoa', 'wnd200', 'wnd850', 'z500', 'z200']
 
-def download_cfsrr(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=False):
+def download_cfsrr(idate, fdate, cfsdir, vrbls=None, anlonly=False, verbose=False):
     """
     Downloads CFSv2 reforecasts (initalized on idate) and 
     corresponding analyses (CFSR; from idate to fdate)
     
+    Requires:
+    idate ---> initialization date (datetime)
+    fdate ---> final/end date (datetime)
+    cfsdir --> full path to CFS download location
+    vrbls ---> list of desired variables
+    anlonly -> download analyses only, and not the reforecasts?
     """
     from urllib.request import urlretrieve
     import time
@@ -163,7 +187,7 @@ def download_cfsrr(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=Fals
         os.system('mkdir {}'.format(cfsdir))
     
     #==== First download the reanalyses ========================================
-    print('\n==== Downloading CFSR reanalyses ====')
+    if verbose: print('\n==== Downloading CFSR reanalyses ====')
     nomads = 'https://nomads.ncdc.noaa.gov/data/cfsr'
     start = time.time()
     
@@ -176,7 +200,7 @@ def download_cfsrr(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=Fals
 
     for y,m in dts:
         for var in vrbls:
-            # Download the forecast of each desired variable
+            # Download the analysis of each desired variable
             yyyymm = '{:04d}{:02d}'.format(y, m)
             url = '{}/{}/{}.gdas.{}.grb2'.format(nomads, yyyymm, var, yyyymm)
             localfile = '{}/anl.{}.cfs.{}.grb2'.format(cfsdir, var, yyyymm)
@@ -184,19 +208,19 @@ def download_cfsrr(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=Fals
                 if verbose: print('File already exists:\n{}'.format(localfile))
                 continue
             try:
-                # Download the forecast
+                # Download the analysis
                 if verbose: print('Downloading {}...'.format(url))
                 urlretrieve(url, localfile)
             except:
                 if verbose: print('{} not found'.format(var))
     end = time.time()
-    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    if verbose: print('Elapsed time: {:.2f} min'.format((end-start)/60.))
     
     # if we only want the reanalyses, then we're done!
     if anlonly: return
     
     #==== Now download the reforecasts ========================================
-    print('\n==== Downloading CFSv2 reforecasts ====')
+    if verbose: print('\n==== Downloading CFSv2 reforecasts ====')
     nomads = 'https://nomads.ncdc.noaa.gov/data/cfsr-rfl-ts9'
     start = time.time()
     for var in vrbls:
@@ -213,16 +237,22 @@ def download_cfsrr(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=Fals
         except:
             if verbose: print('{} not found'.format(var))
     end = time.time()
-    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    if verbose: print('Elapsed time: {:.2f} min'.format((end-start)/60.))
     return
 
 ####################################################################################################
 
-def download_cfs_oper(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=False):
+def download_cfs_oper(idate, fdate, cfsdir, vrbls=None, anlonly=False, verbose=False):
     """
     Downloads operational CFSv2 forecasts (initalized on idate) and 
     corresponding analyses (from idate to fdate)
     
+    Requires:
+    idate ---> initialization date (datetime)
+    fdate ---> final/end date (datetime)
+    cfsdir --> full path to CFS download location
+    vrbls ---> list of desired variables
+    anlonly -> download analyses only, and not the forecasts?
     """
     from urllib.request import urlretrieve
     import time
@@ -231,7 +261,7 @@ def download_cfs_oper(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=F
         os.system('mkdir {}'.format(cfsdir))
     
     #==== First download the reanalyses ========================================
-    print('\n==== Downloading operational CFS analyses ====')
+    if verbose: print('\n==== Downloading operational CFS analyses ====')
     nomads = 'https://nomads.ncdc.noaa.gov/modeldata/cfsv2_analysis_timeseries'
     start = time.time()
     
@@ -244,7 +274,7 @@ def download_cfs_oper(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=F
         
     for y,m in dts:
         for var in vrbls:
-            # Download the forecast of each desired variable
+            # Download the analysis of each desired variable
             yyyy = '{:04d}'.format(y)
             yyyymm = '{}{:02d}'.format(yyyy, m)
             url = '{}/{}/{}/{}.gdas.{}.grib2'.format(nomads, yyyy, yyyymm, var, yyyymm)
@@ -253,24 +283,23 @@ def download_cfs_oper(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=F
                 if verbose: print('File already exists:\n{}'.format(localfile))
                 continue
             try:
-                # Download the forecast
+                # Download the analysis
                 if verbose: print('Downloading {}...'.format(url))
                 urlretrieve(url, localfile)
             except:
                 if verbose: print('{} not found'.format(var))
     end = time.time()
-    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    if verbose: print('Elapsed time: {:.2f} min'.format((end-start)/60.))
     
     # if we only want the reanalyses, then we're done!
     if anlonly: return
     
     #==== Now download the reforecasts ========================================
-    print('\n==== Downloading CFSv2 reforecasts ====')
+    if verbose: print('\n==== Downloading CFSv2 reforecasts ====')
     nomads = 'https://nomads.ncdc.noaa.gov/modeldata/cfsv2_forecast_ts_9mon'
     start = time.time()
     for var in vrbls:
         # Download the forecast of each desired variable
-        # /2011/201112/20111201/2011120100/chi200.01.2011120100.daily.grb2
         url = '{}/{:%Y}/{:%Y%m}/{:%Y%m%d}/{:%Y%m%d%H}/{}.01.{:%Y%m%d%H}.daily.grb2'
         url = url.format(nomads, idate, idate, idate, idate, var, idate)
         localfile = '{}/fcst.{}.cfsv2.{:%Y%m%d%H}.grb2'.format(cfsdir, var, idate)
@@ -284,7 +313,7 @@ def download_cfs_oper(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=F
         except:
             if verbose: print('{} not found'.format(var))
     end = time.time()
-    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    if verbose: print('Elapsed time: {:.2f} min'.format((end-start)/60.))
     return
 
 ####################################################################################################
@@ -292,6 +321,9 @@ def download_cfs_oper(idate, fdate, cfsdir, vrbls=None, verbose=False, anlonly=F
 def download_cfs_climo(climdir, verbose=False):
     """
     Downloads CFSR 1982-2008 calibration climatology gribs
+    
+    Requires:
+    climdir --> full path to CFS download location
     """
     from urllib.request import urlretrieve
     import time
@@ -299,42 +331,48 @@ def download_cfs_climo(climdir, verbose=False):
     if not os.path.isdir(climdir):
         os.system('mkdir {}'.format(climdir))
     
-    #==== First download the reanalyses ========================================
-    print('\n==== Downloading CFSR calibration climatology ====')
+    if verbose: print('\n==== Downloading CFSR calibration climatology ====')
     webpath = 'http://cfs.ncep.noaa.gov/pub/raid0/cfsv2/climo_cfsr_time/mean'
     start = time.time()
     for var in cfs_vars:
-        # Download the forecast of each desired variable
+        # Download the file for each desired variable
         url = '{}/{}.cfsr.mean.clim.daily.1982.2010.grb2'.format(webpath, var)
         localfile = '{}/{}.clim.grb2'.format(climdir, var)
         if os.path.isfile(localfile):
             if verbose: print('File already exists:\n{}'.format(localfile))
             continue
         try:
-            # Download the forecast
+            # Download the file
             if verbose: print('Downloading {}...'.format(url))
             urlretrieve(url, localfile)
         except:
             if verbose: print('{} not found'.format(var))
     end = time.time()
-    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    if verbose: print('Elapsed time: {:.2f} min'.format((end-start)/60.))
     return
 
 ####################################################################################################
 
-def cfs_clim_grb2nc(ncdir, nctable='cfs.table'):
+def cfs_clim_grb2nc(ncdir, nctable='cfs.table', verbose=False):
     """
     Converts downloaded CFSR calibration climatology gribs to netcdf; 
     the gribs are all interpolated to a 0.5-degree lat-lon grid
     before conversion to netCDF (to ensure compatibility for combination)
     
-    Requires the wgrib2 utility.
+    Requires:
+    *the wgrib2 utility(
+    ncdir ---> directory containing the gribs files (where the netcdf will be output)
+    nctable -> name of table file used in the wgrib2 conversion command 
+               (can be either full path or just filename, assuming it is in [ncdir])
     """
     from subprocess import Popen
     import time
         
     # Point to the nc_table
-    tablefile = '{}/{}'.format(ncdir, nctable)
+    if nctable[0] == '/':
+        tablefile = nctable
+    else:
+        tablefile = '{}/{}'.format(ncdir, nctable)
     assert os.path.isfile(tablefile)
     
     # Use the -match keyword to select the desired dates
@@ -348,21 +386,21 @@ def cfs_clim_grb2nc(ncdir, nctable='cfs.table'):
     # to one netcdf file
     start = time.time()
     for v, var in enumerate(cfs_vars):
-        print('processing grib {} of {}...'.format(v+1, len(cfs_vars)))
+        if verbose: print('processing grib {} of {}...'.format(v+1, len(cfs_vars)))
         grbfile = '{}/{}.clim.grb2'.format(ncdir, var)
-        print(grbfile)
+        if verbose: print(grbfile)
         # Check if this field has already been converted
         ncoutfile = '{}/clim.{}.nc'.format(ncdir, var)
         if os.path.isfile(ncoutfile):
-            print('clim.{}.nc already exists!'.format(var))
+            if verbose: print('clim.{}.nc already exists!'.format(var))
             continue
-        print('  interpolating...')
+        if verbose: print('  interpolating...')
         interpcomm = 'wgrib2 {} {} -new_grid latlon 0:720:0.5 -90:361:0.5 temp.grb2'
         interpcomm = interpcomm.format(grbfile, matchtag)
         Popen([interpcomm], shell=True).wait()
         convertcomm = 'wgrib2 temp.grb2 -nc_table {} -netcdf {}'
         convertcomm = convertcomm.format(tablefile, ncoutfile)
-        print('  converting to netcdf...')
+        if verbose: print('  converting to netcdf...')
         if os.path.isfile(ncoutfile):
             # append to the file after the first iteration
             splits = convertcomm.split('-nc_table')
@@ -370,7 +408,7 @@ def cfs_clim_grb2nc(ncdir, nctable='cfs.table'):
         Popen([convertcomm], shell=True).wait()
         Popen(['rm -f temp.grb2'], shell=True).wait()
     end = time.time()
-    print('Elapsed time: {:.2f} min'.format((end-start)/60.))
+    if verbose: print('Elapsed time: {:.2f} min'.format((end-start)/60.))
     return
 
 #############################################################################################################
@@ -380,7 +418,12 @@ def cfs_clim_grb2nc(ncdir, nctable='cfs.table'):
 def download_gfsanl(idate, fdate, workdir, verbose=False):
     """
     Downloads all the 3-hourly GFS analyses (via the NOMADS server) 
-    from [idate] through [fdate] to the location [dpath].
+    from [idate] through [fdate] to the location [workdir]/GFSANL.
+    
+    Requires:
+    idate ---> initialization date (datetime)
+    fdate ---> final/end date (datetime)
+    workdir -> full path to working directory
     """
     ftpanldir = 'GFS/analysis_only'
     if not os.path.isdir('{}/GFS_ANL'.format(workdir)):
@@ -434,12 +477,16 @@ def download_gfsanl(idate, fdate, workdir, verbose=False):
 def download_gpm_imerg(username, idate, fdate, workdir, verbose=False):
     """
     Downloads all the 0.1deg, half-hourly GPM IMERG data (via NASA ftp) 
-    from [idate] through [fdate] to the location [workdir].
-    
-    [username] corresponds to your registered PPM account
+    from [idate] through [fdate] to the location [workdir]/GPM_IMERG.
     
     Example file format:
     3B-HHR-L.MS.MRG.3IMERG.20170401-S000000-E002959.0000.V04A.RT-H5
+    
+    Requires:
+    username -> username for a registered PPM account
+    idate ----> initialization date (datetime)
+    fdate ----> final/end date (datetime)
+    workdir --> full path to working directory
     """
     from subprocess import Popen
             
@@ -453,7 +500,7 @@ def download_gpm_imerg(username, idate, fdate, workdir, verbose=False):
     # login
     ftp = FTP("jsimpson.pps.eosdis.nasa.gov", username, username)
     
-    print('Downloading GPM data from {:%Y%m%d%H} through {:%Y%m%d%H}'.format(idate, fdate))
+    if verbose: print('Downloading GPM data from {:%Y%m%d%H} through {:%Y%m%d%H}'.format(idate, fdate))
     # loop through all the desired days
     for dt in dts:
         y, m, d = dt
@@ -496,8 +543,22 @@ def download_gpm_imerg(username, idate, fdate, workdir, verbose=False):
 
 ####################################################################################################
 
-def process_gpm_imerg(ftpusername, idate, fdate, workdir, ncfile):
-    """ Loads GPM IMERG hdfs and stores as xarray/netcdf """
+def process_gpm_imerg(ftpusername, idate, fdate, workdir, ncfile, verbose=False):
+    """
+    Loads GPM IMERG hdfs and stores as xarray/netcdf
+    
+    Requires:
+    ftpusername -> username for a registered PPM account
+    idate -------> initialization date (datetime)
+    fdate -------> final/end date (datetime)
+    workdir -----> full path to working directory
+    ncfile ------> name of netcdf file (in [workdir]/GPM_IMERG) to store GPM data in
+    
+    Returns:
+    precip ------> xarray DataArray of precipitation data
+    lat ---------> xarray DataArray of latitudes
+    lon ---------> xarray DataArray of longitudes
+    """
     from subprocess import check_output
     import h5py
     import xarray
@@ -506,14 +567,14 @@ def process_gpm_imerg(ftpusername, idate, fdate, workdir, ncfile):
     # Is the data already downloaded?
     if not os.path.isdir(gpmdir):
         # If not, download the hdfs via ftp
-        print('GPM directory not found!')
-        download_gpm_imerg(ftpusername, idate, fdate, workdir)
+        if verbose: print('GPM directory not found!')
+        download_gpm_imerg(ftpusername, idate, fdate, workdir, verbose=verbose)
     # list the hdf files
     gpmfiles = check_output(['ls -1a {}/*H5'.format(gpmdir)], shell=True).split()
 
-    # load the just the precipitation variable from each file
+    # load just the precipitation variable from each file
     varlist = [None] * len(gpmfiles)
-    print('Reading GPM hdf5 files...')
+    if verbose: print('Reading GPM hdf5 files...')
     for f, file in enumerate(gpmfiles):
         if (f+1) % 50 == 0: print(' {} of {}'.format(f+1, len(gpmfiles)))
         # Use h5py to load the precip data
@@ -544,10 +605,14 @@ def download_trmm_3b42rt(username, idate, fdate, workdir, verbose=False):
     Downloads all the 0.25deg, 3-hourly TRMM 3B42RT data (via NASA ftp) 
     from [idate] through [fdate] to the location [workdir].
     
-    [username] corresponds to your registered PPM account
-    
     Example file format:
     3B42.20170212.21.7.HDF.gz
+    
+    Requires:
+    username -> username for a registered PPM account
+    idate ----> initialization date (datetime)
+    fdate ----> final/end date (datetime)
+    workdir --> full path to working directory
     """
     from subprocess import Popen
             
@@ -561,7 +626,7 @@ def download_trmm_3b42rt(username, idate, fdate, workdir, verbose=False):
     # login
     ftp = FTP("arthurhou.pps.eosdis.nasa.gov", username, username)
     
-    print('Downloading TRMM data from {:%Y%m%d%H} through {:%Y%m%d%H}'.format(idate, fdate))
+    if verbose: print('Downloading TRMM data from {:%Y%m%d%H} through {:%Y%m%d%H}'.format(idate, fdate))
     # loop through all the desired days
     for dt in dts:
         y, m, d = dt
@@ -577,7 +642,7 @@ def download_trmm_3b42rt(username, idate, fdate, workdir, verbose=False):
                 
             # get datetime info for each file
             fh = int(file[14:16])
-            print(fh, file)
+            if verbose: print(fh, file)
             file_dt = datetime(y, m, d, fh)
             
             # this is where we will download the file
@@ -605,7 +670,17 @@ def download_trmm_3b42rt(username, idate, fdate, workdir, verbose=False):
 def compute_spatial_error(field, fcst, anl, err='mae', 
                           lllat=-90, lllon=0, urlat=90, urlon=360):
     """
-    Computes the mean absolute error or bias for a given field in a given domain. 
+    Computes the mean absolute error or bias for a given field in a given domain.
+    
+    Requires:
+    field --> name of the variable (string)
+    fcst ---> a LatLonData object of the forecast data
+    anl ----> a LatLonData object of the analyis data
+    err ----> name of the error metric to be calculated (string)
+    lllat --> the latitude at the lower-left corner of the desired domain
+    lllon --> the longitude at the lower-left corner of the desired domain
+    urlat --> the latitude at the upper-right corner of the desired domain
+    urlon --> the longitude at the upper-right corner of the desired domain
     """
     from mpasoutput import nearest_ind
     
@@ -619,7 +694,7 @@ def compute_spatial_error(field, fcst, anl, err='mae',
       
     # Compute the spatial error at each lead time
     # This will be SLOW unless the data is divided into chunks 
-    # (see "chunks" option in MPASprocessed class, or on xarray.Dataset page)
+    # (see "chunks" option in LatLonData class, or on xarray.Dataset page)
         
     ffield = fcst.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True).values
     afield = anl.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True).values
@@ -642,7 +717,15 @@ def compute_spatial_error(field, fcst, anl, err='mae',
 def compute_temporal_error(field, fcst, anl, err='mae', t1=None, t2=None):
     """
     Computes the mean absolute error or bias for a given field from 
-    time t1 to t2 at each grid point. 
+    time t1 to t2 at each grid point.
+    
+    Requires:
+    field --> name of the variable (string)
+    fcst ---> a LatLonData object of the forecast data
+    anl ----> a LatLonData object of the analyis data
+    err ----> name of the error metric to be calculated (string)
+    t1 -----> datetime object for the initial time
+    t2 -----> datetime object for the final time
     """
     from mpasoutput import nearest_ind
     
@@ -682,6 +765,28 @@ def compute_temporal_error(field, fcst, anl, err='mae', t1=None, t2=None):
 
 def errormap(m, ax, cax, field, forecast, analysis, clevs, cmap=color_map('CBR_coldhot'),
              idate=None, vdate=None, units=None, cbar=True, swaplons=False):
+    """
+    Plots a contour map of a forecast and analysis field, and a contour fill of the 
+    difference (error) between the two.
+    
+    Requires:
+    m, ax, cax -> Basemap, axis, and colorbar axis objects
+    field ------> the name of the desired variable to plot (string)
+    forecast ---> a LatLonData object of the forecast data
+    analysis ---> a LatLonData object of the analysis data
+    clevs ------> list of contour levels
+    cmap -------> colormap for the error contour fill
+    idate ------> datetime of the forecast initialization date
+    vdate ------> datetime of the desired valid date in this plot
+    units ------> units of the desired [field] (string)
+    cbar -------> plot the colorbar?
+    swaplons ---> restructure the data to have longitudes from 0 to 360?
+    
+    Returns:
+    cs1, cs2 ---> contour objects for the forecast and analysis
+    csf --------> contour fill object for the error
+    txt --------> (optionally) the title text object
+    """
     from copy import deepcopy
     from plotting_mpas_latlon import get_contour_levs
     import matplotlib
@@ -692,7 +797,7 @@ def errormap(m, ax, cax, field, forecast, analysis, clevs, cmap=color_map('CBR_c
     if swaplons: 
         fcst.restructure_lons(); anl.restructure_lons()
     # Select a time if fcst_xry contains multiple valid times
-    if 'Time' in fcst.dims:
+    if 'Time' in fcst.dims and vdate is not None:
         fcst = fcst.isel(Time=np.where(forecast.vdates()==vdate)[0][0])
         anl = anl.isel(Time=np.where(analysis.vdates()==vdate)[0][0])
     # mapped lat/lon locations

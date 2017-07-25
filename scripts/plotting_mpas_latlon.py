@@ -10,7 +10,7 @@ from color_maker.color_maker import color_map
 from color_maker.nonlinear_cmap import nlcmap
 from copy import deepcopy
 
-#############################################################################################################
+##### Some functions for alterind colormaps ##################################################################
 
 def magnitude(x):
     import math
@@ -34,7 +34,6 @@ def truncate_colormap(cmap, minval=0.0, maxval=1.0, n=100):
     
 def discrete_cmap(N, base_cmap=None):
     """Create an N-bin discrete colormap from the specified input map"""
-
     # Note that if base_cmap is a string or None, you can simply do
     #    return plt.cm.get_cmap(base_cmap, N)
     # The following works for string, None, or a colormap instance:
@@ -52,10 +51,21 @@ def get_contour_levs(field, nlevs=8, zerocenter=False, maxperc=99):
     """
     Computes/returns evenly-spaced integer contour values for a given field, 
     wherein the maximum contour value is the [maxperc]th percentile.
+    
+    Requires:
+    field ------> multidimensional array of data
+    nlevs ------> number of contour levels (int)
+    zerocenter -> do we want zero to be the at the center? (i.e., diverging colormap?)
+    maxperc ----> data percentile to use for max/min of the contour levels
+    
+    Returns:
+    clev -------> list of contour levels (float)
     """
+    # Find the upper and lower percentiles
     perc_lo = np.nanpercentile(field.flatten(), 100-maxperc)
     perc_hi = np.nanpercentile(field.flatten(), maxperc)
     if zerocenter:
+        # Create diverging contour levels
         maxperc = max(np.abs([perc_lo, perc_hi]))  #furthest from zero
         if (nlevs % 2 == 0): #even 
             cint = smartround(maxperc/((nlevs/2.)+1))
@@ -66,6 +76,7 @@ def get_contour_levs(field, nlevs=8, zerocenter=False, maxperc=99):
             half = np.array([0 + i*cint for i in range(int((nlevs+1)/2))])
             clev = np.append(-1*half[1:][::-1], half)
     else:
+        # Create uniformly increasing levels from the lower to upper percentile
         cint = smartround((perc_hi-perc_lo)/nlevs)
         clev = [smartround(perc_lo)+i*cint for i in range(nlevs)]
     assert len(clev)==nlevs
@@ -83,7 +94,7 @@ def draw_fig_axes(proj='orthoNP', mapcol='k', figsize=(12,10), nocb=False):
     figsize --> size (w,h) of figure
     
     Returns:
-    figure, axis, colorbar axis, and Basemap objects
+    fig, ax, cax, m ----> figure, axis, colorbar axis, and Basemap objects
     """
     from mpl_toolkits.axes_grid1 import make_axes_locatable
     import map_projections as mymaps
@@ -120,6 +131,10 @@ def simple_contourf(m, ax, cax, x, y, field, levs=None, cmap=color_map('ncar_tem
     units ----> a string with the units of the field
     cbar -----> plot the colorbar?
     div ------> is this a diverging colormap? (neg/pos values centered at 0)
+    
+    Returns:
+    csf ------> the contour fill object
+    txt ------> (optionally) the title text object
     """
     assert len(np.shape(field))==2
     # get the contourf levels
@@ -161,6 +176,12 @@ def plot_vort_hgt(m, ax, cax, fcst_xry, plev, vlevs=np.arange(-0.2, 5.3, 0.1),
     idate ----> forecast initialization date (datetime object)
     vdate ----> forecast valid date (datetime object)
     cbar -----> plot the colorbar?
+    swaplons -> reorder data so longitudes go from 0 to 360?
+    
+    Returns:
+    csf ------> the contour fill object
+    cs -------> the contour object
+    txt ------> (optionally) the title text object
     """
     # MPAS variable names
     vortvar = 'vorticity_{}hPa'.format(int(plev))
@@ -223,6 +244,12 @@ def plot_t2m_mslp(m, ax, cax, fcst_xry, tlevs=np.arange(-20, 41, 2),
     idate ----> forecast initialization date (datetime object)
     vdate ----> forecast valid date (datetime object)
     cbar -----> plot the colorbar?
+    swaplons -> reorder data so longitudes go from 0 to 360?
+    
+    Returns:
+    csf ------> the contour fill object
+    cs -------> the contour object
+    txt ------> (optionally) the title text object
     """
     # MPAS variable names
     tempvar = 't2m'
@@ -285,6 +312,12 @@ def plot_precip_mslp(m, ax, cax, fcst_xry, plevs=[.005,.01,.02,.05,.1,.25,.5,.75
     idate ----> forecast initialization date (datetime object)
     vdate ----> forecast valid date (datetime object)
     cbar -----> plot the colorbar?
+    swaplons -> reorder data so longitudes go from 0 to 360?
+    
+    Returns:
+    csf ------> the contour fill object
+    cs -------> the contour object
+    txt ------> (optionally) the title text object
     """
     cmap = nlcmap(cmap, plevs)
     # MPAS variable names
@@ -341,6 +374,11 @@ def plot_brightness_temp(m, ax, cax, fcst_xry, blevs=np.arange(-80, 41, 4),
     idate ----> forecast initialization date (datetime object)
     vdate ----> forecast valid date (datetime object)
     cbar -----> plot the colorbar?
+    swaplons -> reorder data so longitudes go from 0 to 360?
+    
+    Returns:
+    csf ------> the contour fill object
+    txt ------> (optionally) the title text object
     """
     # MPAS variable names
     olrvar = 'olrtoa'
@@ -375,27 +413,53 @@ def plot_brightness_temp(m, ax, cax, fcst_xry, blevs=np.arange(-80, 41, 4),
 
 def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, xlims=None, climo=None, roll=0,
                    levs=[.25, 1., 2.5, 5., 10., 15., 20., 30., 40., 50., 75., 100., 125., 150.],
-                   cmap=color_map('ncar_precip'), idate=None, units=None, cbar=True, ext='both'):
+                   cmap=color_map('ncar_precip'), idate=None, units=None, cbar=True, ext='both', 
+                   show_ylabels=True, title=None):
+    """
+    Creates a 2D (longitude-time) plot of meridionally averaged data
+    
+    Requires:
+    ax -------> the axis object corresponding to m
+    cax ------> an axis object for the vertically-oriented colorbar
+    field ----> the name of the variable to be plotted (string)
+    fcst_xry -> an MPASforecast object containing all the forecast variables
+    slat -----> the southernmost latitude of the data to be averaged
+    nlat -----> the northernmost latitude of the data to be averaged
+    xlims ----> the x (longitude) limits for the plot
+    climo ----> the LatLonData climatology dataset (used to calculated anomalies)
+    roll -----> how many indices to roll the data in the x direction
+    levs -----> contour fill levels
+    cmap -----> color map for contour plot
+    idate ----> forecast initialization date (datetime object)
+    units ----> the units for [field]  (string)
+    cbar -----> plot the colorbar?
+    ext ------> 'extend' keyword for contourf function
+    show_ylabels -> show ytick labels?
+    title ----> the title of the figure (string)
+    
+    Returns:
+    csf ------> the contour fill object
+    hov4plot -> the meridionally averaged data
+    """
     import matplotlib.dates as mdates
     
     if roll != 0: assert xlims is None
-    fcst = deepcopy(fcst_xry)
-    fcst.restructure_lons()
+    fcst_xry.restructure_lons()
     # average the field from lat_i to lat_f
-    hov = fcst.hovmoller(field, lat_i=slat, lat_f=nlat)
+    hov = fcst_xry.hovmoller(field, lat_i=slat, lat_f=nlat).values
     if climo is not None:
-        hov -= climo.hovmoller(field, lat_i=slat, lat_f=nlat)
+        hov -= climo.hovmoller(field, lat_i=slat, lat_f=nlat).values
     if 'prate' in field and (np.array(levs)>=0).all(): 
         cmap = nlcmap(cmap, levs)
         ext = 'neither'
         
     # plot the hovmoller, with time increasing downwards
-    x = fcst['lon'].values
+    x = fcst_xry['lon'].values
     y = fcst_xry.vdates()[::-1]
-    hov4plot = np.roll(hov.values[::-1, :], roll, axis=1)
-    cs = ax.contourf(x, y, hov4plot, cmap=cmap, levels=levs, extend=ext)
+    hov4plot = np.roll(hov[::-1, :], roll, axis=1)
+    csf = ax.contourf(x, y, hov4plot, cmap=cmap, levels=levs, extend=ext)
     if cbar: 
-        cb = plt.colorbar(cs, cax=cax)
+        cb = plt.colorbar(csf, cax=cax)
         cb.set_ticks(levs)
         cb.set_ticklabels(levs)
         
@@ -418,6 +482,8 @@ def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, xlims=None, climo=None,
     days = mdates.DayLocator()
     ax.yaxis.set_major_locator(days)
     ax.yaxis.set_major_formatter(datesFmt)
+    if not show_ylabels: 
+        ax.set_yticklabels([])
     ax.grid(color='k', alpha=0.5, linestyle='dashed', linewidth=0.5)
     if xlims is None:
         ax.set_xlim(x[0], x[-1])
@@ -426,11 +492,11 @@ def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, xlims=None, climo=None,
     ax.set_ylim(y[0], y[-1])
     
     # Set titles
-    if units is not None:
-        maintitle = '{} [{}] averaged from {}$^\circ$ to {}$^\circ$'
-        ax.text(0.0, 1.015, maintitle.format(field, units, int(slat), int(nlat)), 
-                transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
+    if units is not None and title is None:
+        title = '{} [{}] averaged from {}$^\circ$ to {}$^\circ$'.format(field, units, int(slat), int(nlat))
+    if title is not None:
+        ax.text(0.0, 1.015, title, transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
     if idate is not None:
         ax.text(1.0, 1.015, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
                 ha='right', va='bottom', fontsize=12)
-    return cs, hov4plot
+    return csf, hov4plot
