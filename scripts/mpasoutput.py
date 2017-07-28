@@ -39,7 +39,7 @@ class LatLonData(xarray.Dataset):
         dt -------> the number of hours between each data time
         chunks ---> dictionary for chunking the xarray contents to dask arrays
         """
-        forecast = xarray.open_dataset(ncfile, chunks=chunks)
+        forecast = xarray.open_dataset(ncfile, chunks=chunks, autoclose=True, decode_cf=False)
         forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
         forecast.__class__ = cls
         return forecast
@@ -112,7 +112,8 @@ class LatLonData(xarray.Dataset):
             Popen(['cd {}; mv latlon.nc {}'.format(workdir, outputfile)], shell=True).wait()
         
         # Finally, create our LatLonData object with xarray
-        forecast = xarray.open_dataset('{}/{}'.format(workdir, outputfile), chunks=chunks)
+        forecast = xarray.open_dataset('{}/{}'.format(workdir, outputfile), chunks=chunks, 
+                                       autoclose=True, decode_cf=False)
         forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
         forecast.__class__ = cls
         return forecast
@@ -141,7 +142,7 @@ class LatLonData(xarray.Dataset):
             verf.download_gfsanl(idate, fdate, workdir, verbose=verbose)
             verf.convert_grb2nc('{}/GFS_ANL'.format(workdir), nctable=nctable, outfile=ncfile, verbose=verbose)
         # Load the netcdf as an xarray Dataset
-        analyses = xarray.open_dataset(infile, chunks=chunks)
+        analyses = xarray.open_dataset(infile, chunks=chunks, autoclose=True, decode_cf=False)
         analyses.attrs.update(idate=idate, dt=3, type='GFS', workdir=workdir)
         analyses.__class__ = cls
         # Rename the coordinates/dims so the functions below still work
@@ -179,7 +180,8 @@ class LatLonData(xarray.Dataset):
         # load the just the precipitation variable from each file
         varlist = []
         for f, file in enumerate(trmmfiles):
-            trmmxry = xarray.open_dataset(file.decode('utf8')).rename({'nlat' : 'nLats', 'nlon' : 'nLons'})
+            trmmxry = xarray.open_dataset(file.decode('utf8'), autoclose=True, 
+                                          decode_cf=False).rename({'nlat' : 'nLats', 'nlon' : 'nLons'})
             varlist.append(trmmxry.data_vars['precipitation'])
         # concatenate and rearrange the precip variable DataArrays
         precip = xarray.concat(varlist, dim='Time').transpose('Time','nLats','nLons')
@@ -223,7 +225,7 @@ class LatLonData(xarray.Dataset):
         # otherwise, load from pre-processed netcdf
         else:
             if verbose: print('Loading from {}/{}'.format(gpmdir, ncfile))
-            dset = xarray.open_dataset('{}/{}'.format(gpmdir, ncfile))
+            dset = xarray.open_dataset('{}/{}'.format(gpmdir, ncfile), autoclose=True, decode_cf=False)
             precip = dset['precip']
             lat = dset['lat']
             lon = dset['lon']
@@ -287,7 +289,7 @@ class LatLonData(xarray.Dataset):
         # the forecast gribs.... grr. )
         if verbose: print('Loading CFSR/CFSv2 from netcdfs...')
         # Process the analyses first
-        analyses = xarray.open_dataset(anlpath)###########, chunks=chunks)
+        analyses = xarray.open_dataset(anlpath, chunks=chunks, autoclose=True)
         # Rename the dimensions
         analyses.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
         if vrbls is None or 'prate' in vrbls or 'ulwtoa' in vrbls:
@@ -298,7 +300,7 @@ class LatLonData(xarray.Dataset):
         
         # Now process the forecast (optionally)
         if not anlonly:
-            forecast = xarray.open_dataset(fcstpath, chunks=chunks)
+            forecast = xarray.open_dataset(fcstpath, chunks=chunks, autoclose=True)
             forecast.rename({'latitude' : 'nLats', 'longitude' : 'nLons', 'time' : 'Time'}, inplace=True)
             # Prepend the t=0 analysis to the forecast (the initialization)
             prepend = analyses.isel(Time=[0]).drop([var for var in analyses.variables.keys() if var \
@@ -354,7 +356,7 @@ class LatLonData(xarray.Dataset):
         # and converted to netcdfs (one per variable)
         # Now we just need to load them in one xarray and select the desired dates
         if verbose: print('Loading CFSR climatology from netcdfs...')
-        climo = xarray.open_mfdataset(climfiles, chunks=chunks)
+        climo = xarray.open_mfdataset(climfiles, chunks=chunks, autoclose=True)
         # Now let's only select the dates we want
         climdates = [datetime.utcfromtimestamp(dt.tolist()/1e9) for dt in climo['time'].values]
         des_dates = [(idate + timedelta(hours=6*x)).replace(year=1984) for x in \
@@ -621,16 +623,17 @@ class LatLonData(xarray.Dataset):
             subset = self[field].isel(nLats=range(yi,yf), nLons=range(xi,xf))
         # Optionally apply a latitude-dependent area-weighting to the data
         if aw:
-            return subset * self.area_weights()[None,yi:yf,None]
+            weights = self.area_weights()
+            return subset, weights[yi:yf]
         else:
             return subset
         
 #==== Average a field within some spacial domain =============================
     def spatial_average(self, field, lat_i=-91, lat_f=91, lon_i=-181, lon_f=361):
         """ Default: global mean """
-        
-        subset = self.subset(field, ll=(lat_i, lon_i), ur=(lat_f, lon_f), aw=True)
-        return subset.mean(dim=('nLats','nLons'), keep_attrs=True)
+        subset, weights = self.subset(field, ll=(lat_i, lon_i), ur=(lat_f, lon_f), aw=True)
+        return np.average(subset.values, axis=(-2,-1), 
+                          weights=np.tile(weights[:,None],(np.shape(subset)[0],1,np.shape(subset)[-1])))
     
 #==== Get the timeseries of a given field at the desired lat/lon =============
     def get_timeseries(self, field, loc, verbose=False):
@@ -724,8 +727,8 @@ class MPASmeshData(xarray.Dataset):
                 'verticesOnCell','verticesOnEdge','edgesOnVertex','cellsOnVertex','kiteAreasOnVertex',
                 'meshDensity']#,'zgrid','fzm','fzp','zz']
     @classmethod
-    def from_netcdf(cls, workdir, idate, dt, inputstream='diag',
-                    meshinfofile='*init.nc', chunks={'Time': 10}, dropvars=None):
+    def from_netcdf(cls, workdir, idate, dt, inputstream='diag', dropvars=None,
+                    loadtomem=False, meshinfofile='*init.nc', chunks={'Time': 10}):
         """
         Initializes a new MPASmeshData object when given
         a list of MPAS output files (netcdf)
@@ -738,27 +741,33 @@ class MPASmeshData(xarray.Dataset):
         idate -------> datetime object indicating the data start date
         dt ----------> the number of hours between each data time
         inputstream -> string: the MPAS output stream to be loaded (e.g., "diag" --> "diag.*.nc"
+        dropvars ----> a list of variables to drop from the Dataset
+        loadtomem ---> load all the data to memory?
         meshinfofile > a filename (or wildcard) pointing to a netcdf with mesh info variables
         outputfile --> the name of the final (interpolated) netcdf file
         chunks ------> dictionary for chunking the xarray contents to dask arrays
-        dropvars ----> a list of variables to drop from the Dataset
         """
         assert isinstance(idate, datetime)
         # List and load the output stream files
         ncfiles = '{}/{}.*.nc'.format(workdir, inputstream)
-        forecast = xarray.open_mfdataset(ncfiles, concat_dim='Time', chunks=chunks, drop_variables=dropvars)
-        # Make sure we have an absolute path to the mesh info file
-        if meshinfofile[0] != '/':
-            meshinfofile = '{}/{}'.format(workdir, meshinfofile)
-        meshinfo = xarray.open_mfdataset(meshinfofile)
-        # Let's make sure that this MPAS output stream has cell/edge/vertex info
-        for var in meshvars:
-            if var not in forecast.variables.keys():
-                meshvar = meshinfo[var]
-                assignvar = {var : meshvar}
-                forecast.update(forecast.assign(**assignvar))
+        forecast = xarray.open_mfdataset(ncfiles, concat_dim='Time', chunks=chunks, 
+                                         autoclose=True, decode_cf=False, drop_variables=dropvars)
+        # Add mesh info variables
+        if meshinfofile is not None:
+            # Make sure we have an absolute path to the mesh info file
+            if meshinfofile[0] != '/':
+                meshinfofile = '{}/{}'.format(workdir, meshinfofile)
+            meshinfo = xarray.open_mfdataset(meshinfofile, autoclose=True, decode_cf=False)
+            # Let's make sure that this MPAS output stream has cell/edge/vertex info
+            for var in meshvars:
+                if var not in forecast.variables.keys():
+                    meshvar = meshinfo[var]
+                    assignvar = {var : meshvar}
+                    forecast.update(forecast.assign(**assignvar))
         # Assign attributes
         forecast.attrs.update(idate=idate, dt=dt, type='MPAS', workdir=workdir)
+        if loadtomem:
+            forecast = forecast.load()
         forecast.__class__ = cls
         return forecast
         
@@ -869,7 +878,7 @@ class MPASmeshData(xarray.Dataset):
                 ncfile = '{}/{}'.format(self.workdir(), file)
                 break
         # Load the terrain variable and add it to this Dataset
-        xry_dset = xarray.open_dataset(ncfile)
+        xry_dset = xarray.open_dataset(ncfile, autoclose=True, decode_cf=False)
         tervar = xry_dset['ter']
         self.update(self.assign(ter=tervar))
         print('Created new variable: "ter"')

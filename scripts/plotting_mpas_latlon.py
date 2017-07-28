@@ -114,7 +114,7 @@ def draw_fig_axes(proj='orthoNP', mapcol='k', figsize=(12,10), nocb=False):
 #############################################################################################################
         
 def simple_contourf(m, ax, cax, x, y, field, levs=None, cmap=color_map('ncar_temp'), varname=None,
-                    idate=None, vdate=None, units=None, cbar=True, div=False):
+                    idate=None, vdate=None, units=None, cbar=True, div=False, ext='both'):
     """
     Takes a 2D field and produces a contourf plot on a map.
     
@@ -142,7 +142,7 @@ def simple_contourf(m, ax, cax, x, y, field, levs=None, cmap=color_map('ncar_tem
         levs = get_contour_levs(field, nlevs=8, zerocenter=div)
     
     # contour fill
-    csf = m.contourf(x, y, field, levels=levs, cmap=cmap, extend='both')
+    csf = m.contourf(x, y, field, levels=levs, cmap=cmap, extend=ext)
     if cbar: plt.colorbar(csf, cax=cax)
     # Set titles
     returns = [csf]
@@ -152,7 +152,7 @@ def simple_contourf(m, ax, cax, x, y, field, levs=None, cmap=color_map('ncar_tem
     if idate is not None and vdate is not None:
         txt = ax.text(1.0, 1.01, 'valid: {:%Y-%m-%d %H:00}'.format(vdate), transform=ax.transAxes,
                 ha='right', va='bottom', fontsize=10)
-        ax.text(1.0, 1.05, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
+        ax.text(1.0, 1.07, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
                 ha='right', va='bottom', fontsize=10)
         returns.append(txt)
     return returns    

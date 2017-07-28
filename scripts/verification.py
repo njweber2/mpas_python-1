@@ -696,14 +696,19 @@ def compute_spatial_error(field, fcst, anl, err='mae',
     # This will be SLOW unless the data is divided into chunks 
     # (see "chunks" option in LatLonData class, or on xarray.Dataset page)
         
-    ffield = fcst.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True).values
-    afield = anl.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True).values
+    ffield, weights = fcst.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True)
+    afield, weights = anl.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True)
+    wgts = np.tile(weights[:,None],(np.shape(ffield)[0],1,np.shape(ffield)[-1]))
     # Mean Absolute Error
     if err.lower() == 'mae':
-        error = np.abs(ffield - afield).mean(axis=(1,2))
+        diff = np.abs(ffield.values - afield.values)
+        diffma = np.ma.masked_array(diff,np.isnan(diff))
+        error = np.average(diffma, axis=(1,2), weights=wgts)
     # Bias
     elif err.lower() == 'bias':
-        error =  (ffield - afield).mean(axis=(1,2))
+        diff = ffield.values - afield.values
+        diffma = np.ma.masked_array(diff,np.isnan(diff))
+        error = np.average(diffma, axis=(1,2), weights=wgts)
     # Correlation
     elif err.lower() in ['corr', 'ac', 'acc']:
         raise ValueError("Haven't implemented correlation yet...")
@@ -749,10 +754,10 @@ def compute_temporal_error(field, fcst, anl, err='mae', t1=None, t2=None):
 
     # Mean Absolute Error
     if err.lower() == 'mae':
-        error =  (np.abs(ffield - afield)).mean(axis=(0))
+        error =  np.nanmean(np.abs(ffield - afield), axis=(0))
     # Bias
     elif err.lower() == 'bias':
-        error =  ((ffield - afield)).mean(axis=(0))
+        error =  np.nanmean((ffield - afield), axis=(0))
     # Correlation
     elif err.lower() in ['corr', 'ac', 'acc']:
         raise ValueError("Haven't implemented correlation yet...")
