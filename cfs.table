@@ -12,7 +12,7 @@ $grads 1
 
 # Include this in the wgrib2 command:
 # MAKE SURE THIS "-match" LINE ALWAYS REMAINS ON LINE 15 OF THIS TEXT FILE!!
-#-match ":(UGRD|VGRD|HGT|PRMSL|PRES|TMP|VPOT|STRM|ULWRF|VVEL|PWAT|PRATE):"
+#-match ":(UGRD|VGRD|HGT|PRMSL|PRES|TMP|VPOT|STRM|ULWRF|VVEL|PWAT|PRATE|LHTFL):"
 
 # ===== RENAME! ========
 PWAT:entire atmosphere (considered as a single layer):precipw
@@ -21,6 +21,7 @@ PRMSL:mean sea level:mslp
 PRES:surface:psfc
 PRATE:surface:prate1h
 VVEL:500 mb:w_500hPa
+LHTFL:surface:lhflux
 # ==== WINDS ======
 UGRD:200 mb:uzonal_200hPa
 VGRD:200 mb:umeridional_200hPa
@@ -37,7 +38,7 @@ HGT:500 mb:height_500hPa
 HGT:200 mb:height_200hPa
 # ==== TEMPERATURE ======
 TMP:2 m above ground:t2m
-TMP:surface:tsfc
+TMP:surface:temperature_surface
 TMP:500 mb:temperature_500hPa
 TMP:850 mb:temperature_850hPa
 # ==== V. Pot. and Strmfnct. ====

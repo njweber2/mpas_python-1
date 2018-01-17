@@ -104,9 +104,8 @@ def draw_merc_warmpool(ax, mapcol='k'):
                 llcrnrlon=50.,urcrnrlon=200.,\
                 rsphere=6371200.,resolution='l',area_thresh=10000)
     m.drawcoastlines(linewidth=1.7, color=mapcol)
-    m.drawstates(color=mapcol)
     m.drawcountries(color=mapcol)
-    m.drawparallels(np.arange(-90.,90,30.),labels=[1,0,0,0],fontsize=10)
+    m.drawparallels(np.arange(-90.,90,10.),labels=[1,0,0,0],fontsize=10)
     m.drawmeridians(np.arange(0.,360.,30.),labels=[0,0,0,1],fontsize=10)
     return m
 

@@ -100,7 +100,7 @@ def mpas_grid_to_patches(mpasfname, picklefile='mpas_paths.pckl',
 #############################################################################################################
 
 def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vmax=3000.,
-                   cmap=color_map('OceanLakeLandSnow'), title=None, time=0):
+                   cmap=color_map('OceanLakeLandSnow'), title=None, time=0, verbose=False):
     """
     Make a pcolor-type plot on the MPAS native mesh.
     Adapted from script by Luke Madaus.
@@ -126,7 +126,7 @@ def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vm
         p = cPickle.load(patchfile)
         patchfile.close()
     except:
-        p = mpas_grid_to_patches(mpasfname=fcst_xry, picklefile=picklefile, bmap=m)
+        p = mpas_grid_to_patches(mpasfname=fcst_xry, picklefile=picklefile, bmap=m, verbose=verbose)
         
     # Get the field grid for plotting
     if 'Time' in fcst_xry[var].dims:
@@ -146,10 +146,10 @@ def pcolor_on_mesh(m, ax, cax, fcst_xry, var='ter', picklefile=None, vmin=0., vm
     ax.add_collection(p)
     plt.colorbar(p, cax=cax)
     if title is not None:
-        ax.text(0.0, 1.015, title, transform=ax.transAxes, ha='left', va='bottom', fontsize=15)
-        ax.text(1.0, 1.009, 'valid: {:%Y-%m-%d %H:00}'.format(fcst_xry.vdates()[time]),
+        ax.text(0.0, 1.005, title, transform=ax.transAxes, ha='left', va='bottom', fontsize=15)
+        ax.text(1.0, 1.005, 'valid: {:%Y-%m-%d %H:00}'.format(fcst_xry.vdates()[time]),
                 transform=ax.transAxes, ha='right', va='bottom', fontsize=12)
-        ax.text(1.0, 1.048, 'init: {:%Y-%m-%d %H:00}'.format(fcst_xry.idate()), 
+        ax.text(1.0, 1.08, 'init: {:%Y-%m-%d %H:00}'.format(fcst_xry.idate()), 
                 transform=ax.transAxes, ha='right', va='bottom', fontsize=12)
         
 #############################################################################################################

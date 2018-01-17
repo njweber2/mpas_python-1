@@ -107,7 +107,7 @@ def draw_fig_axes(proj='orthoNP', mapcol='k', figsize=(12,10), nocb=False):
         return fig, ax, m
     else:
         divider = make_axes_locatable(ax)
-        cax = divider.append_axes('right', size='5%', pad=0.6)
+        cax = divider.append_axes('right', size='5%', pad=0.5)
         return fig, ax, cax, m
 
 
@@ -298,7 +298,7 @@ def plot_precip_mslp(m, ax, cax, fcst_xry, plevs=[.005,.01,.02,.05,.1,.25,.5,.75
                      presintvl=4, cmap=color_map('ncar_precip'), pdt=3,
                      idate=None, vdate=None, cbar=True, swaplons=False):
     """
-    Plots 2m temperature, mean sea level pressure, and 10-meter wind barbs.
+    Plots [pdt]-hourly precipitation (inches) and mslp.
     
     Requires:
     m --------> a Basemap object with the desired projection
@@ -358,11 +358,134 @@ def plot_precip_mslp(m, ax, cax, fcst_xry, plevs=[.005,.01,.02,.05,.1,.25,.5,.75
 
 #############################################################################################################
         
+def plot_precip_mm(m, ax, cax, fcst_xry, plevs=[.10,.25,.5,1,1.5,2,3,4,5,7.5,10,15,20,30],
+                   cmap=color_map('ncar_precip'), pdt=1, idate=None, vdate=None, cbar=True, 
+                   add_olr=False, swaplons=False):
+    """
+    Plots precipitation rate (in mm/h).
+    
+    Requires:
+    m --------> a Basemap object with the desired projection
+    ax -------> the axis object corresponding to m
+    cax ------> an axis object for the vertically-oriented colorbar
+    fcst_xry -> an MPASforecast object containing all the forecast variables
+    plevs ----> contour fill levels for plotting precip rate
+    cmap -----> colormap for precip
+    pdt ------> time interval (hours) over which to calculate the precip rate
+    idate ----> forecast initialization date (datetime object)
+    vdate ----> forecast valid date (datetime object)
+    cbar -----> plot the colorbar?
+    swaplons -> reorder data so longitudes go from 0 to 360?
+    
+    Returns:
+    csp ------> the precip contour fill object
+    cso ------> (optionally) the olr contour object
+    txt ------> (optionally) the title text object
+    """
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    
+    cmap = nlcmap(cmap, plevs)
+    # MPAS variable names
+    precipvar = 'prate{}h'.format(pdt)
+    # Compute the precip rate if it's not in our xarray
+    if precipvar not in fcst_xry.variables.keys():
+        fcst_xry.compute_preciprate(dt=pdt)
+    # If the projection (e.g., Mercator) crosses 180, we need to restructure the longitudes
+    fcst = deepcopy(fcst_xry)
+    if swaplons: 
+        fcst.restructure_lons()
+    # Select a time if fcst_xry contains multiple valid times
+    if 'Time' in fcst.dims:
+        fcst = fcst.isel(Time=np.where(fcst_xry.vdates()==vdate)[0][0])
+    # mapped lat/lon locations
+    x, y = fcst.project_coordinates(m)
+    # optionally, plot the OLR beneath the precip
+    if add_olr:
+        olr = fcst['olrtoa'].values
+        cso = m.contourf(x, y, olr, cmap=color_map('MPL_Greys'), levels=range(70,331,2), extend='both')
+        #if cbar:
+        #    divider = make_axes_locatable(ax)
+        #    cax2 = divider.append_axes('right', size='5%', pad=0.9)
+        #    plt.colorbar(cso, cax=cax2)
+    # contour fill the precip
+    precip = fcst[precipvar].values
+    csp = m.contourf(x, y, precip, cmap=cmap, levels=plevs)
+    if cbar: 
+        plt.colorbar(csp, cax=cax, ticks=plevs)
+    # Set titles
+    if add_olr: returns = [cso, csp]
+    else: returns = [csp]
+        
+    if idate is not None and vdate is not None:
+        maintitle = '{}-h precipitation [mm]'.format(pdt)
+        if add_olr: maintitle += ' and OLR [W m$^{-2}$]'
+        ax.text(0.0, 1.015, maintitle, transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
+        txt = ax.text(1.0, 1.01, 'valid: {:%Y-%m-%d %H:00}'.format(vdate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+        ax.text(1.0, 1.052, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+        returns.append(txt)
+    return returns
+
+#############################################################################################################
+        
+def plot_simul_refl(m, ax, cax, fcst_xry, levs=np.arange(5., 66., 5.),
+                   cmap=color_map('radar'), pdt=1, idate=None, vdate=None, cbar=True, swaplons=False):
+    """
+    Plots simulated 1-km AGL reflectivity .
+    
+    Requires:
+    m --------> a Basemap object with the desired projection
+    ax -------> the axis object corresponding to m
+    cax ------> an axis object for the vertically-oriented colorbar
+    fcst_xry -> an MPASforecast object containing all the forecast variables
+    levs ----> contour fill levels for plotting precip rate
+    cmap -----> colormap for reflectivity
+    idate ----> forecast initialization date (datetime object)
+    vdate ----> forecast valid date (datetime object)
+    cbar -----> plot the colorbar?
+    swaplons -> reorder data so longitudes go from 0 to 360?
+    
+    Returns:
+    csr ------> the contour fill object
+    txt ------> (optionally) the title text object
+    """
+    # MPAS variable names
+    reflvar = 'refl10cm_1km'
+    
+    # If the projection (e.g., Mercator) crosses 180, we need to restructure the longitudes
+    fcst = deepcopy(fcst_xry)
+    if swaplons: 
+        fcst.restructure_lons()
+    # Select a time if fcst_xry contains multiple valid times
+    if 'Time' in fcst.dims:
+        fcst = fcst.isel(Time=np.where(fcst_xry.vdates()==vdate)[0][0])
+    # mapped lat/lon locations
+    x, y = fcst.project_coordinates(m)
+    
+    # contour fill the reflectivity
+    precip = fcst[reflvar].values
+    csr = m.contourf(x, y, precip, cmap=cmap, levels=levs, extend='max')
+    if cbar: plt.colorbar(csr, cax=cax)
+    # Set titles
+    returns = [csr]
+    if idate is not None and vdate is not None:
+        maintitle = 'simulated 1-km AGL reflectivity [dBZ]'
+        ax.text(0.0, 1.015, maintitle, transform=ax.transAxes, ha='left', va='bottom', fontsize=14)
+        txt = ax.text(1.0, 1.01, 'valid: {:%Y-%m-%d %H:00}'.format(vdate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+        ax.text(1.0, 1.052, 'init: {:%Y-%m-%d %H:00}'.format(idate), transform=ax.transAxes,
+                ha='right', va='bottom', fontsize=12)
+        returns.append(txt)
+    return returns
+
+#############################################################################################################
+        
 def plot_brightness_temp(m, ax, cax, fcst_xry, blevs=np.arange(-80, 41, 4),
                          bcmap=color_map('ncar_ir'), idate=None, vdate=None, 
                          cbar=True, swaplons=False):
     """
-    Plots TOA OLR, precipitation, and 850 hPa wind barbs.
+    Plots brightness temperature (derived from OLR).
     
     Requires:
     m --------> a Basemap object with the desired projection
@@ -411,10 +534,10 @@ def plot_brightness_temp(m, ax, cax, fcst_xry, blevs=np.arange(-80, 41, 4),
 
 #############################################################################################################
 
-def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, xlims=None, climo=None, roll=0,
+def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, xlims=None, ylims=None, climo=None, roll=0,
                    levs=[.25, 1., 2.5, 5., 10., 15., 20., 30., 40., 50., 75., 100., 125., 150.],
                    cmap=color_map('ncar_precip'), idate=None, units=None, cbar=True, ext='both', 
-                   show_ylabels=True, title=None):
+                   show_ylabels=True, title=None, dlon=60):
     """
     Creates a 2D (longitude-time) plot of meridionally averaged data
     
@@ -464,7 +587,7 @@ def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, xlims=None, climo=None,
         cb.set_ticklabels(levs)
         
     # make the plot look nice
-    xticks = np.arange(0, 361, 60)
+    xticks = np.arange(0, 361, dlon)
     if roll != 0:
         xticklocs = xticks + roll*fcst_xry.dx()
         xticklocs[xticklocs < 0] += 360
@@ -489,7 +612,10 @@ def plot_hovmoller(ax, cax, field, fcst_xry, slat, nlat, xlims=None, climo=None,
         ax.set_xlim(x[0], x[-1])
     else:
         ax.set_xlim(xlims[0], xlims[1])
-    ax.set_ylim(y[0], y[-1])
+    if ylims is None:
+        ax.set_ylim(y[0], y[-1])
+    else:
+        ax.set_ylim(ylims[0], ylims[1])
     
     # Set titles
     if units is not None and title is None:

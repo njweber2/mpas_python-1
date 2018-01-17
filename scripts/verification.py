@@ -166,7 +166,7 @@ def convert_grb2nc(ncdir, nctable='cfs.table', outfile='cfsr.nc', daterange=None
 ### SECTION FOR HANDLING OPERATIONAL/RETROSPECTIVE CFSv2 FORECASTS/ANALYSES #################################
 #############################################################################################################
 cfs_vars = ['chi200', 'prate', 'pressfc', 'psi200', 'pwat', 'tmp2m',
-            'tmpsfc', 'ulwtoa', 'wnd200', 'wnd850', 'z500', 'z200']
+            'tmpsfc', 'ulwtoa', 'wnd200', 'wnd850', 'z500', 'z200', 'lhtfl']
 
 def download_cfsrr(idate, fdate, cfsdir, vrbls=None, anlonly=False, verbose=False):
     """
@@ -663,12 +663,87 @@ def download_trmm_3b42rt(username, idate, fdate, workdir, verbose=False):
     ftp.close()
     return
 
+####################################################################################################
+
+def process_ssmi_raw(startdate, ndays, ssmidir, vrbls=['vapor', 'rain'], missing=-999.,
+                     satellites=['f16','f17'], verbose=False):
+    """
+    Converts raw, gzipped daily SSMI data into grouped daily netcdf files
+    
+    Requires:
+    startdate --> initialization date (datetime)
+    ndays ------> number of days' worth of SSMI data
+    ssmidir ----> full path to directory with the raw data (will also be the nc output directory)
+    vrbls ------> list of variables to extract from the SSMI files
+    missing ----> value for missing data
+    satellites -> list of satellites to extract the data from (f[xx])
+    """
+    from datatools.ssmi_daily_v7 import SSMIdaily
+    from netCDF4 import Dataset, num2date, date2num
+
+    # Name of the netcdf file that will be created
+    ncoutfile = '{}/ssmi_{}_{:%Y%m%d}-{:%Y%m%d}.nc'.format(ssmidir, ('').join(satellites), 
+                                                           startdate, startdate+timedelta(days=ndays-1))
+    # A dictionary to convert SSMI vrbl names to MPAS vrbl names
+    vardict = {'vapor' : 'precipw', 'rain' : 'prate1h'}
+    
+    # Create empty full data arrays
+    fulldata = {}
+    for vrbl in vrbls:
+        nsats = len(satellites)
+        fulldata[vrbl] = np.zeros((ndays, 2*nsats, 720, 1440))  # 2 --> ascending and descending passes
+        
+    if verbose: print('Loading SSMI data....')
+    # Load the data for each daily
+    for day in range(ndays):
+        date = startdate + timedelta(days=day)
+        if verbose: print(date)
+        # Load data from each of the satellites
+        for s, satellite in enumerate(satellites):
+            ssmifile = '{}/{}_{:%Y%m%d}v7.gz'.format(ssmidir, satellite, date)
+            # LOAD THE DATASET
+            dataset = SSMIdaily(ssmifile, missing=missing)
+            # Load the dimensions
+            if s==0 and day==0:
+                lats = np.array(dataset.variables['latitude'])
+                lons = np.array(dataset.variables['longitude'])
+            i = s*2 # index for the second dimension of the full array
+            # Load the data for the desired variables
+            for vrbl in vrbls:
+                fulldata[vrbl][day, i:i+2, :, :] = dataset.variables[vrbl]
+    # Put nans in for missing data
+    for vrbl in vrbls:
+        fulldata[vrbl][fulldata[vrbl]==missing] = np.nan
+        
+    if verbose: print('Saving data to netcdf file...')
+    with Dataset(ncoutfile, 'w') as ncdata:
+        # Create dimensions
+        ncdata.createDimension('Time', ndays)
+        ncdata.createDimension('Pass', 4)
+        ncdata.createDimension('nLats', len(lats))
+        ncdata.createDimension('nLons', len(lons))
+        # Store dimensional variables
+        times = ncdata.createVariable('date', 'i', ('Time',))
+        times.units = 'hours since 1800-01-01'
+        times[:] = date2num(np.array([startdate+timedelta(days=d) for d in range(ndays)]), 'hours since 1800-01-01')
+        passes = ncdata.createVariable('passnumber', 'i', ('Pass',))
+        passes[:] = np.arange(4)+1
+        la = ncdata.createVariable('lat', 'f4', ('nLats',))
+        la[:] = lats
+        lo = ncdata.createVariable('lon', 'f4', ('nLons',))
+        lo[:] = lons
+        # Store the precip and pwat data
+        for vrbl in vrbls:
+            var = ncdata.createVariable(vardict[vrbl], 'f4', ('Time', 'Pass', 'nLats', 'nLons',))
+            var[:] = fulldata[vrbl]
+    if verbose: print('Done!')
+
 #############################################################################################################
 ### OTHER VERIFICATION TOOLS ################################################################################
 #############################################################################################################
 
-def compute_spatial_error(field, fcst, anl, err='mae', 
-                          lllat=-90, lllon=0, urlat=90, urlon=360):
+def compute_spatial_error(field, fcst, anl, err='mae', lllat=-90, lllon=0, urlat=90, urlon=360,
+                          idate=None, fdate=None):
     """
     Computes the mean absolute error or bias for a given field in a given domain.
     
@@ -689,12 +764,15 @@ def compute_spatial_error(field, fcst, anl, err='mae',
     alats, alons = anl.latlons()
     assert (np.shape(lats)==np.shape(alats))
     assert (np.shape(lons)==np.shape(alons))
-    assert fcst[field].shape==anl[field].shape
     assert len(fcst[field].shape)==3
       
     # Compute the spatial error at each lead time
     # This will be SLOW unless the data is divided into chunks 
     # (see "chunks" option in LatLonData class, or on xarray.Dataset page)
+    if idate is not None and fdate is not None:
+        fcst = fcst.isel(Time=np.where((fcst.vdates()>=idate)*(fcst.vdates()<=fdate))[0])
+        anl = anl.isel(Time=np.where((anl.vdates()>=idate)*(anl.vdates()<=fdate))[0])
+    assert fcst[field].shape==anl[field].shape
         
     ffield, weights = fcst.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True)
     afield, weights = anl.subset(field, ll=(lllat,lllon), ur=(urlat,urlon), aw=True)
@@ -734,7 +812,6 @@ def compute_temporal_error(field, fcst, anl, err='mae', t1=None, t2=None):
     """
     from mpasoutput import nearest_ind
     
-    assert fcst[field].shape==anl[field].shape
     assert len(fcst[field].shape)==3
     
     if t1 is None or t2 is None:
@@ -747,6 +824,7 @@ def compute_temporal_error(field, fcst, anl, err='mae', t1=None, t2=None):
         i2 = nearest_ind(vdates, t2)+1
         ffield = fcst.isel(Time=range(i1,i2))[field].values
         afield = anl.isel(Time=range(i1,i2))[field].values
+    assert np.shape(ffield)==np.shape(afield)
       
     # Compute the temporal error at each grid point
     # This will be SLOW unless the data is divided into chunks 
